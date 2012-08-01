@@ -1,0 +1,33 @@
+# Aliases
+alias grep='nocorrect grep --color=auto'
+
+alias l='ls'
+alias ll='ls -l'
+alias la='ls -a'
+
+alias v='vi'
+
+alias rezsh='source ~/.zshrc'
+
+# git aliases
+alias g='git'
+alias ga='git add'
+alias gp='git push'
+alias gl='git log'
+alias gs='git status'
+alias gd='git diff'
+alias gm='git commit -m'
+alias gma='git commit -am'
+alias gb='git branch'
+alias gc='git checkout'
+alias gra='git remote add'
+alias grr='git remote rm'
+alias gpu='git pull'
+alias gcl='git clone'
+
+if [[ -f ~/.aliases_local ]]
+then
+	source ~/.aliases_local
+fi
+
+alias 'perlrepl'='perl -MData::Dumper -MTerm::ReadLine -e '\''$r = Term::ReadLine->new(1);while(defined($_ = $r->readline("code: "))){$ret=Dumper(eval($_));$err=$@;if($err ne ""){print $err;}else{print $ret;}}'\'''

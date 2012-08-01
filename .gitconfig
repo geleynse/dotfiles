@@ -1,0 +1,33 @@
+[user]
+	email = trano@ra726.net
+    name = Alan Geleynse
+[branch]
+	autosetuprebase = always
+[alias]
+	squash = !~/scripts/git-squash.rb
+	lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --date=relative
+	st = status -sb
+	co = checkout
+	ci = commit
+	br = branch
+	df = diff
+	who = shortlog -s --
+[push]
+	default = tracking
+[color]
+	branch = auto
+	status = auto
+	diff = auto
+[color "diff"]
+	meta = yellow
+	frag = cyan
+	old = red
+	new = green
+[color "branch"]
+	current = green reverse
+	local = green
+	remote = yellow
+[color "status"]
+	added = yellow
+	changed = green
+	untracked = cyan
