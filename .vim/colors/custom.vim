@@ -78,7 +78,7 @@ highlight MBENormal cterm=bold ctermfg=6
 highlight javaScriptBraces cterm=bold ctermfg=6
 highlight javaScriptNull   cterm=bold ctermfg=5
 "highlight javaScriptParens cterm=bold ctermfg=208
-highlight javaScriptParens cterm=bold ctermfg=10
+highlight javaScriptParens cterm=bold ctermfg=2
 highlight javaScriptValue  cterm=bold ctermfg=5
 highlight javaScriptStringS  cterm=none ctermfg=2
 highlight javaScriptStringD  cterm=none ctermfg=2

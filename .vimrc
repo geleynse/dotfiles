@@ -78,6 +78,12 @@ function! ChangePaste(type, ...)
     silent exe "normal! p"
 endfunction
 
+"left/right arrow keys change indent
+nnoremap <Left> <<
+nnoremap <Right> >>
+vnoremap <Left> <gv
+vnoremap <Right> >gv
+
 "text bubbling
 nnoremap <C-j> :m+<CR>==
 nnoremap <C-k> :m-2<CR>==
@@ -85,6 +91,14 @@ inoremap <C-j> <Esc>:m+<CR>==gi
 inoremap <C-k> <Esc>:m-2<CR>==gi
 vnoremap <C-j> :m'>+<CR>gv=gv
 vnoremap <C-k> :m-2<CR>gv=gv
+
+"up/down arrow keys also bubble text
+nnoremap <Down> :m+<CR>==
+nnoremap <Up> :m-2<CR>==
+inoremap <Down> <Esc>:m+<CR>==gi
+inoremap <Up> <Esc>:m-2<CR>==gi
+vnoremap <Down> :m'>+<CR>gv=gv
+vnoremap <Up> :m-2<CR>gv=gv
 
 "use ack instead of grep
 set grepprg=ack\ -a
