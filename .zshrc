@@ -35,7 +35,7 @@ setopt COMPLETE_IN_WORD
 
 ## history
 ## for sharing history between zsh processes
-setopt SHARE_HISTORY			# share history between shell instances
+#setopt SHARE_HISTORY			# share history between shell instances
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
