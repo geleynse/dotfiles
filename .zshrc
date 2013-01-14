@@ -34,10 +34,16 @@ setopt COMPLETE_IN_WORD
 #setopt HUP
 
 ## history
-#setopt APPEND_HISTORY
 ## for sharing history between zsh processes
-#setopt INC_APPEND_HISTORY
-#setopt SHARE_HISTORY
+setopt SHARE_HISTORY			# share history between shell instances
+setopt EXTENDED_HISTORY			# store time in history
+setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
+setopt HIST_VERIFY				# Make those history commands nice
+setopt INC_APPEND_HISTORY		# immediatly insert history into history file
+HISTSIZE=15000					# spots for duplicates/uniques
+SAVEHIST=15000					# unique events guarenteed, but since we are ignoring dups it is the same
+HISTFILE=~/.history
+
 
 ## automatically decide when to page a list of completions
 #LISTMAX=0
@@ -147,15 +153,6 @@ setopt ALWAYS_TO_END			# Push that cursor on completions.
 setopt AUTO_NAME_DIRS			# change directories  to variable names
 setopt AUTO_PUSHD				# push directories on every cd
 setopt NO_BEEP					# self explanatory
-
-######################### history options ############################
-setopt EXTENDED_HISTORY			# store time in history
-setopt HIST_EXPIRE_DUPS_FIRST	# unique events are more usefull to me
-setopt HIST_VERIFY				# Make those history commands nice
-setopt INC_APPEND_HISTORY		# immediatly insert history into history file
-HISTSIZE=16000					# spots for duplicates/uniques
-SAVEHIST=15000					# unique events guarenteed
-HISTFILE=~/.history
 
 ######################### completion #################################
 # these are some (mostly) sane defaults, if you want your own settings, I
