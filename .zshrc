@@ -135,7 +135,7 @@ if [[ $EMACS == "t" ]]; then
 	export PAGER=cat			# otherwise funkiness in M-x shell
 else
 	export PAGER=less			# less is more :)
-	export LESS="-eir"			# set up less to be a little nicer and display color in git logs correctly
+	export LESS="-er"			# set up less to be a little nicer and display color in git logs correctly
 fi
 
 #Set caps lock to be ESC for vim
