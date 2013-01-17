@@ -39,7 +39,6 @@ setopt COMPLETE_IN_WORD
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
-setopt INC_APPEND_HISTORY		# immediatly insert history into history file
 HISTSIZE=15000					# spots for duplicates/uniques
 SAVEHIST=15000					# unique events guarenteed, but since we are ignoring dups it is the same
 HISTFILE=~/.history
