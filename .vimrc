@@ -44,7 +44,7 @@ set timeout timeoutlen=1000 ttimeoutlen=100
 
 "Tab settings
 set ts=4 sts=4 sw=4
-set noexpandtab
+set expandtab
 
 "Show special characters
 set list
