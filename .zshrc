@@ -147,6 +147,11 @@ source ~/.aliases
 #runs command stack is popped
 bindkey "^T" push-line-or-edit
 
+#Other useful bindings
+bindkey "^R" history-incremental-search-backward
+bindkey "^E" end-of-line
+bindkey "^B" beginning-of-line
+
 ######################### zsh options ################################
 setopt ALWAYS_TO_END			# Push that cursor on completions.
 setopt AUTO_NAME_DIRS			# change directories  to variable names
