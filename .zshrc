@@ -83,9 +83,10 @@ then
 	precmd ()
 	{
 		# if you are at a zsh prompt, make your screen title your current directory
-		local TITLE=${PWD:t}
-		#TITLE=${(S)PWD/src\/appgroup\/*\/*\//.../}
-		TITLE=${(S)PWD/*\/geleynse-git-*\/*\//.../}
+		#local TITLE=${PWD:t}
+		local TITLE=${(S)PWD/src\/appgroup\/*\/*\//.../}
+		TITLE=${(S)TITLE/*\/geleynse-git-*\/*\//.../}
+		TITLE=${(S)TITLE/*\/geleynse-git-*\//.../}
 		# 'screen' sets STY as well, so for users who override the TERM
 		# environment variable, checking STY is nice
 		setopt UNSET # Avoid errors from undefined STY for users with 'NOUNSET'
