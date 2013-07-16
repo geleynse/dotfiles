@@ -2,7 +2,6 @@
 alias grep='nocorrect grep --color=auto'
 
 alias l='ls'
-alias ll='ls -l'
 alias la='ls -a'
 
 alias v='vi'
@@ -33,3 +32,11 @@ fi
 alias 'perlrepl'='perl -MData::Dumper -MTerm::ReadLine -e '\''$r = Term::ReadLine->new(1);while(defined($_ = $r->readline("code: "))){$ret=Dumper(eval($_));$err=$@;if($err ne ""){print $err;}else{print $ret;}}'\'''
 
 alias colout='python ~/bin/colout/colout.py'
+
+#color aliases
+alias rainbow='colout "^.*$" rainbow'
+alias Rainbow='colout "^.*$" Rainbow'
+
+ll () {
+    ls -l $* | colout -t ll
+}
