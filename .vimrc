@@ -166,6 +166,9 @@ endfunction
 " Run it every time we change buffers
 autocmd BufEnter,BufFilePost * call SetTitle()
 
+"Always show the status line
+set laststatus=2
+
 if filereadable($HOME."/.vimrc_local")
 	source $HOME/.vimrc_local
 endif
