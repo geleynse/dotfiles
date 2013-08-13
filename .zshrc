@@ -128,6 +128,9 @@ DIRSTACKSIZE=20   # number of directories in your pushd/popd stack
 export EDITOR="vim"
 export VISUAL=$EDITOR # some programs use this instead of EDITOR
 
+#Set up jk to work as the mode switch in vim mode
+bindkey -M viins 'jk' vi-cmd-mode
+
 #Use emacs mode since zsh only has a vi mode, not a vim mode and it takes way more work to get it working nicely
 #bindkey -e
 
@@ -137,9 +140,6 @@ else
 	export PAGER=less			# less is more :)
 	export LESS="-er"			# set up less to be a little nicer and display color in git logs correctly
 fi
-
-#Set caps lock to be ESC for vim
-#xmodmap ~/.capslocktoesc
 
 source ~/.aliases
 
