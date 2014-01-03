@@ -15,6 +15,7 @@
     assume = update-index --assume-unchanged
     unassume = update-index --no-assume-unchanged
     assumed = "!git ls-files -v | grep ^h | cut -c 3-"
+    dag = log --graph --format='format:%C(yellow)%h%C(reset) %C(blue)\"%an\" <%ae>%C(reset) %C(magenta)%cr%C(reset)%C(auto)%d%C(reset)%n%s' --date-order
 [push]
     default = tracking
 [diff]
@@ -23,6 +24,7 @@
     branch = auto
     status = auto
     diff = auto
+    ui = auto
 [color "diff"]
     meta = yellow
     frag = cyan
@@ -36,3 +38,7 @@
     added = yellow
     changed = green
     untracked = cyan
+[core]
+    pager = less -FMRiX
+    excludesfile = /home/geleynse/.config/git/excludes
+    bare = false
