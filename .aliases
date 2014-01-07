@@ -37,6 +37,6 @@ alias colout='python ~/bin/colout/colout.py'
 alias rainbow='colout "^.*$" rainbow'
 alias Rainbow='colout "^.*$" Rainbow'
 
-ll () {
-    ls -l $* | colout -t ll
-}
+#ll () {
+#    ls -l $* | colout -t ll
+#}
