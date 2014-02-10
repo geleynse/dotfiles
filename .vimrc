@@ -15,7 +15,9 @@ set incsearch
 set autowrite
 set autoread
 set hidden
-set mouse=a
+if has('mouse')
+    set mouse=a
+endif
 set ttymouse=xterm "fix hang in screen/tmux
 set autoindent
 set smartindent
@@ -134,8 +136,8 @@ try
 	endif
 
 	set undofile
-	set undolevels = 1000
-	set undoreload = 10000
+	set undolevels=1000
+	set undoreload=10000
 catch
 endtry
 
