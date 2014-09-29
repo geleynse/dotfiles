@@ -1,2 +1,4 @@
 --type-add=css=.scss
 --type-set=mason=.m,.mi
+--ignore-directory=is:target
+--ignore-directory=is:gen
