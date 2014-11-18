@@ -141,6 +141,9 @@ else
 	export LESS="-er"			# set up less to be a little nicer and display color in git logs correctly
 fi
 
+source ~/.zsh_modules/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets)
+
 source ~/.aliases
 
 #AWESOME...
