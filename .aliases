@@ -1,6 +1,8 @@
 # Aliases
 alias grep='nocorrect grep --color=auto'
 
+alias sudopath='sudo env PATH=$PATH'
+
 alias l='ls'
 alias la='ls -a'
 
