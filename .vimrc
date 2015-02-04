@@ -29,6 +29,7 @@ set scrolloff=3 "Scroll 3 lines before edge of screen
 set bs=2 "Fix backspace
 
 let mapleader=","
+let maplocalleader="\\"
 
 syntax enable
 
@@ -170,6 +171,8 @@ autocmd BufEnter,BufFilePost * call SetTitle()
 
 "Always show the status line
 set laststatus=2
+
+let g:airline_theme = 'powerlineish'
 
 if filereadable($HOME."/.vimrc_local")
 	source $HOME/.vimrc_local
