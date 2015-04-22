@@ -181,6 +181,9 @@ endif
 "Make F3 display the highlight name for the character under the cursor to make color schemes easier to write
 :map <F3> :echo "hi<" . synIDattr(synID(line("."),col("."),1),"name") . '> trans<' . synIDattr(synID(line("."),col("."),0),"name") . "> lo<" . synIDattr(synIDtrans(synID(line("."),col("."),1)),"name") . ">"<CR>
 
+"Make F5 display gundo
+nnoremap <F5> :GundoToggle<CR>
+
 "Shortcuts for specific languages
 
 "Mason
