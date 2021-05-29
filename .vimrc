@@ -33,23 +33,15 @@ let maplocalleader="\\"
 
 syntax enable
 
-"let g:solarized_termcolors=16
-"set background=dark
-"colorscheme solarized
-
-"colorscheme blackboard
-
-colorscheme custom
+colorscheme geleynse
 
 inoremap jk <ESC>
 
-"Turn off esckeys so hitting <Esc>-O doesnt have a delay
 "Adjust settings to avoid annoying timeouts after <Esc>-O and others
-"set noesckeys
 set timeout timeoutlen=1000 ttimeoutlen=100
 
 "Tab settings
-set ts=4 sts=4 sw=4
+set ts=2 sts=2 sw=2
 set expandtab
 
 "Show special characters
@@ -123,11 +115,6 @@ else
 endif
 set magic
 
-"Set suffixes for lower priority in tab completion
-set suffixes=.bak,~,.swp,.o,.info,.aux,.log,.dvi,.bbl,.blg,.brf,.cb,.ind,.idx,.ilg,.inx,.out,.toc,.class
-
-"set shell=/bin/bash
-
 "Persistent undo
 try
 	if MySys() == "windows"
@@ -183,13 +170,4 @@ endif
 
 "Make F5 display gundo
 nnoremap <F5> :GundoToggle<CR>
-
-"Shortcuts for specific languages
-
-"Mason
-nmap @p I<%perl><CR></%perl><CR><ESC>kO
-nmap @a I<%args><CR></%args><CR><ESC>kO
-nmap @d I<%doc><CR></%doc><CR><ESC>kO
-nmap @m I<%method><CR></%method><CR><ESC>kO
-nmap @% a<% %><ESC>3hi
 
