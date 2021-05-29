@@ -28,27 +28,14 @@ export PATH
 #allow tab completion in the middle of a word
 setopt COMPLETE_IN_WORD
 
-## keep background processes at full speed
-#setopt NOBGNICE
-## restart running processes on exit
-#setopt HUP
-
 ## history
 ## for sharing history between zsh processes
-#setopt SHARE_HISTORY			# share history between shell instances
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
-HISTSIZE=15000					# spots for duplicates/uniques
-SAVEHIST=15000					# unique events guarenteed, but since we are ignoring dups it is the same
+HISTSIZE=100000					# spots for duplicates/uniques
+SAVEHIST=100000					# unique events guarenteed, but since we are ignoring dups it is the same
 HISTFILE=~/.history
-
-
-## automatically decide when to page a list of completions
-#LISTMAX=0
-
-## disable mail checking
-#MAILCHECK=0
 
 #Watch for logins
 #watch=all
@@ -131,9 +118,6 @@ export VISUAL=$EDITOR # some programs use this instead of EDITOR
 #Set up jk to work as the mode switch in vim mode
 bindkey -M viins 'jk' vi-cmd-mode
 
-#Use emacs mode since zsh only has a vi mode, not a vim mode and it takes way more work to get it working nicely
-#bindkey -e
-
 if [[ $EMACS == "t" ]]; then
 	export PAGER=cat			# otherwise funkiness in M-x shell
 else
@@ -146,7 +130,6 @@ ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets)
 
 source ~/.aliases
 
-#AWESOME...
 #pushes current command on command stack and gives blank line, after that line
 #runs command stack is popped
 bindkey "^T" push-line-or-edit

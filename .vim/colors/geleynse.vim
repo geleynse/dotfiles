@@ -1,6 +1,6 @@
 " Vim color scheme
 "
-" Name:         custom.vim
+" Name:         geleynse.vim
 " Maintainer:   Alan Geleynse
 
 set background=dark
