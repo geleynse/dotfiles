@@ -107,6 +107,11 @@ then
 		  echo -ne "\e]0;$CMD\a"
 		fi
 		setopt LOCAL_OPTIONS # restore value of UNSET
+
+    local TIME=`date +"[%H:%M:%S] "`
+    local zero='%([BSUbfksu]|([FK]|){*})'
+    local PROMPTLEN=${#${(S%%)PROMPT//$~zero/}}
+    echo "\033[1A\033[$(($(echo -n $1 | wc -m)+$PROMPTLEN))C $fg[yellow]${TIME}$reset_color"
 	}
 fi
 
