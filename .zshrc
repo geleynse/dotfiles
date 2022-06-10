@@ -164,8 +164,9 @@ zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}' 'r:|[._-]=** r:|=**' 'l:|
 zstyle ':completion:*' menu select=long
 zstyle ':completion:*' select-prompt '%SScrolling active: current selection at %p%s'
 zstyle ':completion:*' use-compctl true
+zstyle :compinstall filename '/home/alan/.zshrc'
 
-autoload -U compinit
+autoload -Uz compinit
 compinit
 # End of lines added by compinstall
 

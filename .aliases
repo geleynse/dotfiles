@@ -6,7 +6,8 @@ alias sudopath='sudo env PATH=$PATH'
 # shortened commands
 alias l='ls'
 alias la='ls -a'
-alias v='vi'
+alias v='vim'
+alias vi='vim'
 
 alias rezsh='source ~/.zshrc'
 
