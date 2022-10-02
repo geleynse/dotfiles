@@ -33,8 +33,9 @@ setopt COMPLETE_IN_WORD
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
-HISTSIZE=100000					# spots for duplicates/uniques
-SAVEHIST=100000					# unique events guarenteed, but since we are ignoring dups it is the same
+HISTFILESIZE=10000000000
+HISTSIZE=10000000000
+SAVEHIST=10000000000
 HISTFILE=~/.history
 
 #Watch for logins
@@ -234,3 +235,4 @@ unset k
 [[ -n "${key[Left]}"    ]]  && bindkey  "${key[Left]}"    backward-char
 [[ -n "${key[Right]}"   ]]  && bindkey  "${key[Right]}"   forward-char
 #End special key setup
+
