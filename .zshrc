@@ -236,3 +236,4 @@ unset k
 [[ -n "${key[Right]}"   ]]  && bindkey  "${key[Right]}"   forward-char
 #End special key setup
 
+alias dotfiles='/usr/bin/git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
