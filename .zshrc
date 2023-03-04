@@ -38,6 +38,92 @@ HISTSIZE=10000000000
 SAVEHIST=10000000000
 HISTFILE=~/.history
 
+# History configuration adapted from https://gist.github.com/muzso/f784e98fb187fe5e38117f9e2bd8c0e6
+
+# The following function sets up history management in a way that each shell's
+# history is saved into separate files and they are archived into monthly files.
+# This prevents accidental loss of history entries.
+# Uses zsh-specific features, but can be adapted to other shells (eg. bash)
+# as well. The reading of a file into the internal history list of a shell
+# cannot be done without an if-else based on the shell's type or the
+# availability of specific shell builtins), thus I didn't bother to keep this
+# fully bash-compatible.
+# It is not guaranteed that history entries are ordered by date&time
+# (neither in monthly archives, nor in the shells' internal history list),
+# but a best effort is made to preserve the correct order.
+# Note that history entries can be multi-line thus re-ordering a history file
+# is expensive and complex (and I don't do it here).
+# Useful history related shell options to set:
+#   setopt extendedhistory histignoredups incappendhistorytime
+setopt INC_APPEND_HISTORY
+() {
+  local hist_dir_path="$HOME/zsh-history"
+  if ! mkdir -p "$hist_dir_path"; then
+    echo "Failed to create directory at \"$hist_dir_path\"\! Shell history will not be saved." >&2
+    return
+  fi
+
+  if [ ! -r "$hist_dir_path" -o ! -w "$hist_dir_path" -o ! -x "$hist_dir_path" ]; then
+    echo "Insufficient permissions for \"$hist_dir_path\"\! Shell history will neither be loaded nor saved." >&2
+    return
+  fi
+
+  local temp_hist_prefix="zsh_history."
+
+  # Each shell instance uses a separate file to record it's history.
+  # This also means that shell instances won't be able to load the history of
+  # other running instances.
+  # I.e. you won't be able to recall commands in a (running) shell instance that
+  # were executed in another (running) shell instance.
+  # If you'd like to have a shared history file between running instances, you
+  # can remove the PID variable ($$) from the end of the filename.
+  HISTFILE="$hist_dir_path/${temp_hist_prefix}$(date "+%F_%H-%M-%S").$$"
+  export HISTFILE
+
+  # Uncomment the following if you want history files created via sudo root
+  # sessions to be owned by the original user. Otherwise these root history
+  # files will only be merged into the monthly archive, when you next switch
+  # to root via sudo.
+  # Note that this might not be a good idea in a multiuser environment.
+  # In theory the two environment variables (SUDO_UID and SUDO_GID) could pose
+  # some risk if sudo itself is vulnerable or misconfigured (i.e. if any of
+  # these variables can be set from outside of sudo).
+  if [ "$(id -u)" -eq 0 ]; then
+    touch "$HISTFILE"
+    [ -n "$SUDO_UID" ] && expr "$SUDO_UID" : '^[0-9]\+$' > /dev/null 2>&1 && chown "$SUDO_UID" "$HISTFILE"
+    [ -n "$SUDO_GID" ] && expr "$SUDO_GID" : '^[0-9]\+$' > /dev/null 2>&1 && chgrp "$SUDO_GID" "$HISTFILE"
+  fi
+
+  local hist_archive_prefix="zsh_history_archive"
+  local current_month_hist_archive="$hist_dir_path/${hist_archive_prefix}$(date "+%Y-%m").log"
+
+  # Prevent parallel execution of the following block using
+  # "$hist_dir_path/lockfile" as a lockfile.
+  (
+    flock -en 9 || return
+
+    # For all temporary shell history files ...
+    for h in "$hist_dir_path/$temp_hist_prefix"*(N); do
+      # Make sure that the current history file is never touched.
+      [ "$h" = "$HISTFILE" ] && continue
+      # Get the section after the last dot from the filename.
+      h_pid="${h##*.}"
+      # Skip the file if the found string is not empty and a process with
+      # a PID from the string exists.
+      [ -n "$h_pid" ] && kill -0 "$h_pid" 2> /dev/null && continue
+      # Concatenate the contents of the file to the current month's history
+      # archive and delete the file.
+      [ -r "$h" ] && cat "$h" >> "$current_month_hist_archive" && rm "$h"
+    done
+  ) 9> "$hist_dir_path/lockfile"
+
+  # Load all history archives (in order) into the internal history list.
+  for h in "$hist_dir_path/$hist_archive_prefix"*(Nn); do [ -r "$h" ] && fc -R "$h"; done
+
+  # Load all temporary history files (in order) into the internal history list.
+  for h in "$hist_dir_path/$temp_hist_prefix"*(Nn); do [ -r "$h" ] && fc -R "$h"; done
+}
+
 #Watch for logins
 #watch=all
 watch=notme
