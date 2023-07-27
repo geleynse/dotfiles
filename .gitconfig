@@ -42,3 +42,5 @@
     pager = less -FMRiX
     excludesfile = /home/geleynse/.config/git/excludes
     bare = false
+[init]
+	defaultBranch = main
