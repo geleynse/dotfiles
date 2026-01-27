@@ -17,7 +17,7 @@
     assumed = "!git ls-files -v | grep ^h | cut -c 3-"
     dag = log --graph --format='format:%C(yellow)%h%C(reset) %C(blue)\"%an\" <%ae>%C(reset) %C(magenta)%cr%C(reset)%C(auto)%d%C(reset)%n%s' --date-order
 [push]
-    default = tracking
+    default = simple
 [diff]
     algorithm = patience
 [color]
@@ -40,7 +40,6 @@
     untracked = cyan
 [core]
     pager = less -FMRiX
-    excludesfile = /home/geleynse/.config/git/excludes
     bare = false
 [init]
 	defaultBranch = main

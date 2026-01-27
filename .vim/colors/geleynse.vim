@@ -11,7 +11,7 @@ endif
 
 set t_Co=256
 
-let g:colors_name = "custom"
+let g:colors_name = "geleynse"
 
 highlight SpecialKey     term=bold cterm=bold ctermfg=4
 "highlight NonText        term=bold cterm=bold ctermfg=4
@@ -57,7 +57,6 @@ highlight MatchParen     term=reverse ctermbg=6
 "highlight Comment        term=bold ctermfg=246
 highlight Comment        term=bold ctermfg=6
 "highlight Constant       term=underline cterm=bold ctermfg=5
-highlight Constant       term=underline cterm=none ctermfg=10
 highlight Constant       term=underline cterm=none ctermfg=10
 highlight Special        term=bold cterm=bold ctermfg=1
 highlight Identifier     term=underline cterm=bold ctermfg=6

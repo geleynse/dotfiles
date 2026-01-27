@@ -98,8 +98,8 @@ inoremap <Up> <Esc>:m-2<CR>==gi
 vnoremap <Down> :m'>+<CR>gv=gv
 vnoremap <Up> :m-2<CR>gv=gv
 
-"use ack instead of grep
-set grepprg=ack\ -a
+"use ripgrep for :grep
+set grepprg=rg\ --vimgrep
 
 filetype plugin on
 filetype indent on
@@ -116,18 +116,10 @@ endif
 set magic
 
 "Persistent undo
-try
-	if MySys() == "windows"
-	  set undodir=C:\Windows\Temp
-	else
-	  set undodir=~/.vim/undodir
-	endif
-
-	set undofile
-	set undolevels=1000
-	set undoreload=10000
-catch
-endtry
+set undodir=~/.vim/undodir
+set undofile
+set undolevels=1000
+set undoreload=10000
 
 "function to switch between relative and absolute line numbers
 function! g:ToggleNuMode()

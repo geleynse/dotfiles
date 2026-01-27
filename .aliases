@@ -32,6 +32,9 @@ then
 	source ~/.aliases_local
 fi
 
+# ack -> rg migration reminder
+ack() { echo "Use rg instead of ack"; rg "$@"; }
+
 alias colout='python ~/bin/colout/colout.py'
 
 #color aliases

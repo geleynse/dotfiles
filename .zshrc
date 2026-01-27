@@ -33,10 +33,6 @@ setopt COMPLETE_IN_WORD
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
-HISTFILESIZE=10000000000
-HISTSIZE=10000000000
-SAVEHIST=10000000000
-HISTFILE=~/.history
 
 # History configuration adapted from https://gist.github.com/muzso/f784e98fb187fe5e38117f9e2bd8c0e6
 
