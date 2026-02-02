@@ -1,0 +1,317 @@
+#!/bin/bash
+# Server update management script
+# Config: ~/.config/server-updates/servers.conf
+
+CONFIG_FILE="$HOME/.config/server-updates/servers.conf"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+usage() {
+    echo "server-update - Manage updates across multiple servers"
+    echo ""
+    echo "Usage: server-update <command> [server|all]"
+    echo ""
+    echo "Commands:"
+    echo "  list              List all configured servers"
+    echo "  status [name]     Check connectivity (all if no name)"
+    echo "  check [name]      Check for available updates (all if no name)"
+    echo "  apply [name]      Apply updates (all if no name, with confirmation)"
+    echo "  apply -y [name]   Apply updates without confirmation"
+    echo "  help              Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  server-update list              # Show all servers"
+    echo "  server-update status            # Check all servers are reachable"
+    echo "  server-update check proxmox     # Check updates on proxmox only"
+    echo "  server-update check             # Check updates on all servers"
+    echo "  server-update apply nas         # Update nas server"
+    echo "  server-update apply             # Update all servers (with confirmation)"
+    echo "  server-update apply -y          # Update all without confirmation"
+    echo "  server-update apply -y proxmox  # Update proxmox without confirmation"
+    echo ""
+    echo "Configuration:"
+    echo "  Config file: $CONFIG_FILE"
+    echo ""
+    echo "  Format: name|type|ssh_command"
+    echo ""
+    echo "  Server types:"
+    echo "    proxmox  - Proxmox host (apt, root access)"
+    echo "    debian   - Debian/Ubuntu server (apt with sudo)"
+    echo "    ha       - Home Assistant via Proxmox guest exec"
+    echo "    gcp      - Google Cloud instance (gcloud compute ssh)"
+    echo ""
+    echo "  Example config entries:"
+    echo "    proxmox|proxmox|ssh -n root@192.168.1.2"
+    echo "    nas|debian|ssh -n alan@192.168.1.3"
+    echo "    homeassistant|ha|ssh -n root@192.168.1.2 \"qm guest exec 102 --\""
+    echo "    gcp-server|gcp|gcloud compute ssh instance-name --zone=us-west1-b --"
+    echo ""
+    echo "  Note: Use 'ssh -n' to prevent stdin issues when checking multiple servers"
+}
+
+load_servers() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${RED}Config file not found: $CONFIG_FILE${NC}"
+        exit 1
+    fi
+}
+
+get_servers() {
+    grep -v '^#' "$CONFIG_FILE" | grep -v '^$'
+}
+
+get_server() {
+    local name=$1
+    grep -v '^#' "$CONFIG_FILE" | grep "^${name}|"
+}
+
+run_cmd() {
+    local ssh_cmd=$1
+    local cmd=$2
+    local type=$3
+
+    # Always redirect stdin to prevent commands from consuming loop input
+    if [[ "$type" == "gcp" ]]; then
+        # GCP uses -- to separate ssh args from command
+        eval "$ssh_cmd \"$cmd\"" </dev/null 2>/dev/null
+    elif [[ "$type" == "ha" ]]; then
+        # HA uses qm guest exec which returns JSON
+        eval "$ssh_cmd \"$cmd\"" </dev/null 2>/dev/null | jq -r '."out-data" // empty' 2>/dev/null
+    else
+        eval "$ssh_cmd \"$cmd\"" </dev/null 2>/dev/null
+    fi
+}
+
+check_connectivity() {
+    local name=$1
+    local type=$2
+    local ssh_cmd=$3
+
+    # Always redirect stdin to prevent commands from consuming loop input
+    if [[ "$type" == "ha" ]]; then
+        if eval "$ssh_cmd 'echo test'" </dev/null &>/dev/null; then
+            echo -e "${GREEN}online${NC}"
+        else
+            echo -e "${RED}offline${NC}"
+        fi
+    elif [[ "$type" == "gcp" ]]; then
+        if eval "$ssh_cmd 'echo test'" </dev/null 2>/dev/null | grep -q test; then
+            echo -e "${GREEN}online${NC}"
+        else
+            echo -e "${RED}offline${NC}"
+        fi
+    else
+        if eval "$ssh_cmd 'echo test'" </dev/null &>/dev/null; then
+            echo -e "${GREEN}online${NC}"
+        else
+            echo -e "${RED}offline${NC}"
+        fi
+    fi
+}
+
+check_updates() {
+    local name=$1
+    local type=$2
+    local ssh_cmd=$3
+
+    echo -e "${BLUE}=== $name ===${NC}"
+
+    case $type in
+        proxmox)
+            result=$(run_cmd "$ssh_cmd" "apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
+            if echo "$result" | grep -q upgradable; then
+                count=$(echo "$result" | grep -c upgradable)
+                echo -e "${YELLOW}$count packages available${NC}"
+                echo "$result" | grep upgradable | head -10
+                if [[ $count -gt 10 ]]; then
+                    echo "  ... and $((count-10)) more"
+                fi
+            else
+                echo -e "${GREEN}Up to date${NC}"
+            fi
+            ;;
+        debian)
+            result=$(run_cmd "$ssh_cmd" "sudo apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
+            if echo "$result" | grep -q upgradable; then
+                count=$(echo "$result" | grep -c upgradable)
+                echo -e "${YELLOW}$count packages available${NC}"
+                echo "$result" | grep upgradable | head -10
+                if [[ $count -gt 10 ]]; then
+                    echo "  ... and $((count-10)) more"
+                fi
+            else
+                echo -e "${GREEN}Up to date${NC}"
+            fi
+            ;;
+        ha)
+            echo "Core:"
+            run_cmd "$ssh_cmd" "ha core info" "$type" | grep -E "version|update_available" | head -3
+            echo "OS:"
+            run_cmd "$ssh_cmd" "ha os info" "$type" | grep -E "version|update_available" | head -3
+            ;;
+        gcp)
+            result=$(run_cmd "$ssh_cmd" "sudo apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
+            if echo "$result" | grep -q upgradable; then
+                count=$(echo "$result" | grep -c upgradable)
+                echo -e "${YELLOW}$count packages available${NC}"
+                echo "$result" | grep upgradable | head -10
+            else
+                echo -e "${GREEN}Up to date${NC}"
+            fi
+            ;;
+    esac
+    echo ""
+}
+
+apply_updates() {
+    local name=$1
+    local type=$2
+    local ssh_cmd=$3
+
+    echo -e "${BLUE}=== Updating $name ===${NC}"
+
+    case $type in
+        proxmox)
+            run_cmd "$ssh_cmd" "apt update -qq && apt upgrade -y" "$type"
+            ;;
+        debian)
+            run_cmd "$ssh_cmd" "sudo apt update -qq && sudo apt upgrade -y" "$type"
+            ;;
+        ha)
+            echo "Updating Core..."
+            run_cmd "$ssh_cmd" "ha core update" "$type"
+            echo "Updating OS..."
+            run_cmd "$ssh_cmd" "ha os update" "$type"
+            ;;
+        gcp)
+            run_cmd "$ssh_cmd" "sudo apt update -qq && sudo apt upgrade -y" "$type"
+            ;;
+    esac
+
+    echo -e "${GREEN}Done${NC}"
+    echo ""
+}
+
+cmd_list() {
+    echo -e "${BLUE}Configured Servers:${NC}"
+    echo ""
+    printf "%-15s %-10s %s\n" "NAME" "TYPE" "CONNECTION"
+    printf "%-15s %-10s %s\n" "----" "----" "----------"
+
+    while IFS='|' read -r name type ssh_cmd; do
+        printf "%-15s %-10s %s\n" "$name" "$type" "$ssh_cmd"
+    done < <(get_servers)
+}
+
+cmd_status() {
+    local target=$1
+
+    echo -e "${BLUE}Server Status:${NC}"
+    echo ""
+    printf "%-15s %-10s %s\n" "NAME" "TYPE" "STATUS"
+    printf "%-15s %-10s %s\n" "----" "----" "------"
+
+    while IFS='|' read -r name type ssh_cmd; do
+        if [[ -z "$target" || "$target" == "all" || "$target" == "$name" ]]; then
+            status=$(check_connectivity "$name" "$type" "$ssh_cmd")
+            printf "%-15s %-10s %b\n" "$name" "$type" "$status"
+        fi
+    done < <(get_servers)
+}
+
+cmd_check() {
+    local target=$1
+
+    while IFS='|' read -r name type ssh_cmd; do
+        if [[ -z "$target" || "$target" == "all" || "$target" == "$name" ]]; then
+            check_updates "$name" "$type" "$ssh_cmd"
+        fi
+    done < <(get_servers)
+}
+
+cmd_apply() {
+    local skip_confirm=false
+    local target=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -y|--yes)
+                skip_confirm=true
+                shift
+                ;;
+            *)
+                target=$1
+                shift
+                ;;
+        esac
+    done
+
+    # Default to all if no target specified
+    [[ -z "$target" ]] && target="all"
+
+    # Collect servers to update
+    local servers=()
+    while IFS='|' read -r name type ssh_cmd; do
+        if [[ "$target" == "all" || "$target" == "$name" ]]; then
+            servers+=("$name|$type|$ssh_cmd")
+        fi
+    done < <(get_servers)
+
+    if [[ ${#servers[@]} -eq 0 ]]; then
+        echo -e "${RED}No matching servers found${NC}"
+        exit 1
+    fi
+
+    # Confirm unless -y flag
+    if [[ "$skip_confirm" != true ]]; then
+        echo -e "${YELLOW}Will update the following servers:${NC}"
+        for s in "${servers[@]}"; do
+            echo "  - $(echo "$s" | cut -d'|' -f1)"
+        done
+        echo ""
+        read -p "Continue? [y/N] " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "Aborted"
+            exit 0
+        fi
+        echo ""
+    fi
+
+    for s in "${servers[@]}"; do
+        IFS='|' read -r name type ssh_cmd <<< "$s"
+        apply_updates "$name" "$type" "$ssh_cmd"
+    done
+}
+
+# Main
+load_servers
+
+case ${1:-} in
+    list)
+        cmd_list
+        ;;
+    status)
+        cmd_status "${2:-}"
+        ;;
+    check)
+        cmd_check "${2:-all}"
+        ;;
+    apply)
+        shift
+        cmd_apply "$@"
+        ;;
+    help|-h|--help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac
