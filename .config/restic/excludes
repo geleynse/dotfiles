@@ -1,0 +1,53 @@
+# Restic backup excludes
+# Cache directories
+/home/alan/.cache
+/home/alan/**/.cache
+/home/alan/**/Cache*
+/home/alan/**/GPUCache
+/home/alan/**/ShaderCache
+/home/alan/**/__pycache__
+
+# Application data
+/home/alan/.config/Code/User/*Storage
+/home/alan/.config/Code/Cache
+/home/alan/.config/Code/CachedExtensionVSIXs
+/home/alan/.config/Code/CachedData
+/home/alan/.config/Code/logs
+/home/alan/.config/Code/Service Worker
+/home/alan/.config/google-chrome
+/home/alan/.local/share/Trash
+/home/alan/.local/share/Steam
+/home/alan/.local/share/Zeal/Zeal/docsets
+/home/alan/.local/share/flatpak
+/home/alan/.local/share/virtualenvs
+
+# Development tools (can be reinstalled)
+/home/alan/.platformio
+/home/alan/.conda
+/home/alan/.ollama
+/home/alan/.minikube
+/home/alan/.rustup
+/home/alan/.cargo/registry
+/home/alan/.npm
+/home/alan/.pyenv
+/home/alan/.vscode/extensions
+/home/alan/.arduino15/cache
+/home/alan/.arduino15/packages
+/home/alan/.arduino15/staging
+/home/alan/esp/esp-idf
+/home/alan/Android/Sdk
+/home/alan/go
+/home/alan/**/node_modules
+
+# Games
+/home/alan/.minecraft/[^saves]*
+/home/alan/.paradoxlauncher
+
+# Other
+/home/alan/code/infra/home/esphome/**/.esphome
+/home/alan/pi
+/home/alan/backups/drives/Music
+/home/alan/tmp-*
+/home/alan/code/pub
+/home/alan/lost+found
+/home/alan/.config/restic/password
