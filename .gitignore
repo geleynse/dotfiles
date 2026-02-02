@@ -3,6 +3,11 @@
 .cache
 .config/*
 !.config/server-updates/
+!.config/git/
+!.config/restic/
+# Only track excludes from restic, not credentials
+.config/restic/env
+.config/restic/password
 .espressif
 .factorio
 .java
