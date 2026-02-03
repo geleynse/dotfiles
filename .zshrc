@@ -33,6 +33,8 @@ setopt COMPLETE_IN_WORD
 setopt EXTENDED_HISTORY			# store time in history
 setopt HIST_IGNORE_DUPS			# only have 1 history entry for duplicate commands
 setopt HIST_VERIFY				# Make those history commands nice
+HISTSIZE=10000				# lines of history to keep in memory
+SAVEHIST=100000				# lines of history to save to file
 
 # History configuration adapted from https://gist.github.com/muzso/f784e98fb187fe5e38117f9e2bd8c0e6
 
@@ -317,20 +319,4 @@ unset k
 [[ -n "${key[Left]}"    ]]  && bindkey  "${key[Left]}"    backward-char
 [[ -n "${key[Right]}"   ]]  && bindkey  "${key[Right]}"   forward-char
 #End special key setup
-
-
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/usr/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
-if [ $? -eq 0 ]; then
-    eval "$__conda_setup"
-else
-    if [ -f "/usr/etc/profile.d/conda.sh" ]; then
-        . "/usr/etc/profile.d/conda.sh"
-    else
-        export PATH="/usr/bin:$PATH"
-    fi
-fi
-unset __conda_setup
-# <<< conda initialize <<<
 
