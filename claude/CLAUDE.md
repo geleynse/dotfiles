@@ -31,3 +31,16 @@ Most configs support local overrides that are not tracked in git:
 Located in `.vim/bundle/`: fugitive, gundo, minibufexpl, supertab, surround, togglemouse, vim-airline, vim-airline-themes
 
 Submodules managed via `.gitmodules`.
+
+## Infrastructure Connections
+
+| Server | Command |
+|--------|---------|
+| Proxmox | `ssh root@192.168.1.2` |
+| OMV (NAS) | `ssh alan@192.168.1.3` |
+| Home Assistant | `ssh hassio@192.168.1.4` |
+| GCP | `gcloud compute ssh general-2 --zone=us-west1-b` |
+
+**HA Config:** `~/code/8354-home-assistant/` (sync to server via `cat file | ssh hassio@192.168.1.4 "sudo tee /config/file"`)
+
+Documentation: `~/Dendron/vault.personal/infra*.md`
