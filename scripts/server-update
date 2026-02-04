@@ -18,7 +18,7 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  list              List all configured servers (invalid types shown in red)"
-    echo "  status [name]     Check connectivity (all if no name, ${SSH_TIMEOUT}s timeout)"
+    echo "  status [name]     Check connectivity (all if no name)"
     echo "  check [name]      Check for updates, offers to apply if any found"
     echo "  apply [name]      Apply updates (all if no name, with confirmation)"
     echo "  apply -y [name]   Apply updates without confirmation"
@@ -54,7 +54,7 @@ usage() {
     echo "  Note: Use 'ssh -n' to prevent stdin issues when checking multiple servers"
     echo ""
     echo "Features:"
-    echo "  - ${SSH_TIMEOUT}s timeout on SSH connections"
+    echo "  - ${SSH_TIMEOUT}s timeout on SSH, ${GCP_TIMEOUT}s for GCP instances"
     echo "  - Warns if config file has insecure permissions"
     echo "  - Shows errors instead of failing silently"
     echo "  - 'check' offers to apply updates when finished"
@@ -90,8 +90,9 @@ get_servers() {
     grep -v '^#' "$CONFIG_FILE" | grep -v '^$'
 }
 
-# SSH timeout in seconds
+# SSH timeout in seconds (GCP instances are slower, especially free-tier)
 SSH_TIMEOUT=30
+GCP_TIMEOUT=90
 
 run_cmd() {
     local ssh_cmd=$1
@@ -105,8 +106,8 @@ run_cmd() {
 
     # Always redirect stdin to prevent commands from consuming loop input
     if [[ "$type" == "gcp" ]]; then
-        # GCP uses -- to separate ssh args from command (gcloud has its own timeout)
-        result=$(eval "$ssh_cmd \"$cmd\"" </dev/null 2>&1)
+        # GCP uses -- to separate ssh args from command (longer timeout for slow instances)
+        result=$(eval "timeout ${GCP_TIMEOUT}s $ssh_cmd \"$cmd\"" </dev/null 2>&1)
         exit_code=$?
     elif [[ "$type" == "ha" ]]; then
         # HA uses qm guest exec which returns JSON
@@ -132,8 +133,8 @@ check_connectivity() {
 
     # Always redirect stdin to prevent commands from consuming loop input
     if [[ "$type" == "gcp" ]]; then
-        # gcloud has its own timeout handling
-        if eval "$ssh_cmd 'echo test'" </dev/null 2>/dev/null | grep -q test; then
+        # GCP needs longer timeout for slow instances
+        if eval "timeout ${GCP_TIMEOUT}s $ssh_cmd 'echo test'" </dev/null 2>/dev/null | grep -q test; then
             echo -e "${GREEN}online${NC}"
         else
             echo -e "${RED}offline${NC}"
