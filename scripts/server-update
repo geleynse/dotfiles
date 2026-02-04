@@ -1,6 +1,23 @@
 #!/bin/bash
-# Server update management script
-# Config: ~/.config/server-updates/servers.conf
+#
+# server-update - Manage updates across multiple servers
+#
+# Checks for and applies updates on Proxmox, Debian, Home Assistant, and GCP servers.
+# Configuration: ~/.config/server-updates/servers.conf
+#
+# Usage: server-update <command> [server|all]
+#   list              List configured servers
+#   status [name]     Check connectivity
+#   check [name]      Check for updates (offers to apply if found)
+#   apply [-y] [name] Apply updates
+#   help              Show help
+#
+# Security note: Config file should be mode 600 to prevent tampering.
+# This script uses eval to construct SSH commands from config - ensure
+# config file is owned by you and not writable by others.
+#
+
+set -uo pipefail
 
 CONFIG_FILE="$HOME/.config/server-updates/servers.conf"
 
