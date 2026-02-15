@@ -43,10 +43,18 @@
 /home/alan/.minecraft/[^saves]*
 /home/alan/.paradoxlauncher
 
+# Wine / Gaming
+/home/alan/.wine
+/home/alan/.local/share/lutris
+
+# AI tools (reinstallable, sessions/logs)
+/home/alan/.local/share/claude
+
 # Other
 /home/alan/code/infra/home/esphome/**/.esphome
 /home/alan/pi
 /home/alan/backups/drives/Music
+/home/alan/qmk_firmware
 /home/alan/tmp-*
 /home/alan/code/pub
 /home/alan/lost+found
