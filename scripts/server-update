@@ -107,9 +107,24 @@ get_servers() {
     grep -v '^#' "$CONFIG_FILE" | grep -v '^$'
 }
 
-# SSH timeout in seconds (GCP instances are slower, especially free-tier)
-SSH_TIMEOUT=30
-GCP_TIMEOUT=90
+# SSH timeout in seconds (Pi Zero W and GCP instances are slow)
+SSH_TIMEOUT=120
+GCP_TIMEOUT=120
+
+# Convert exit code to human-readable error message
+exit_code_msg() {
+    local code=$1
+    case $code in
+        124) echo "timed out after ${SSH_TIMEOUT}s" ;;
+        125) echo "timeout command failed" ;;
+        126) echo "command not executable" ;;
+        127) echo "command not found" ;;
+        128) echo "invalid exit argument" ;;
+        130) echo "interrupted (Ctrl+C)" ;;
+        255) echo "SSH connection failed" ;;
+        *) echo "exit code $code" ;;
+    esac
+}
 
 run_cmd() {
     local ssh_cmd=$1
@@ -186,7 +201,7 @@ check_updates() {
             result=$(run_cmd "$ssh_cmd" "apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
-                echo -e "${RED}Failed to check updates (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Failed to check updates $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | head -3
             elif echo "$result" | grep -q upgradable; then
                 has_updates=true
@@ -204,7 +219,7 @@ check_updates() {
             result=$(run_cmd "$ssh_cmd" "sudo apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
-                echo -e "${RED}Failed to check updates (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Failed to check updates $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | head -3
             elif echo "$result" | grep -q upgradable; then
                 has_updates=true
@@ -265,7 +280,7 @@ check_updates() {
             result=$(run_cmd "$ssh_cmd" "sudo apt update -qq 2>/dev/null && apt list --upgradable 2>/dev/null" "$type")
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
-                echo -e "${RED}Failed to check updates (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Failed to check updates $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | head -3
             elif echo "$result" | grep -q upgradable; then
                 has_updates=true
@@ -308,7 +323,7 @@ apply_updates() {
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
                 had_error=true
-                echo -e "${RED}Update failed (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Update failed $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | tail -10
             else
                 echo "$result" | tail -5
@@ -319,7 +334,7 @@ apply_updates() {
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
                 had_error=true
-                echo -e "${RED}Update failed (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Update failed $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | tail -10
             else
                 echo "$result" | tail -5
@@ -329,9 +344,12 @@ apply_updates() {
             echo "Updating Core..."
             result=$(run_cmd "$ssh_cmd" "ha core update" "$type")
             cmd_exit=$?
-            if [[ $cmd_exit -ne 0 ]]; then
+            if [[ $cmd_exit -eq 124 || $cmd_exit -eq 255 ]]; then
+                # Timeout or connection lost during update is expected (HA restarts)
+                echo -e "${YELLOW}Connection lost (HA is restarting for update)${NC}"
+            elif [[ $cmd_exit -ne 0 ]]; then
                 had_error=true
-                echo -e "${RED}Core update failed${NC}"
+                echo -e "${RED}Core update failed $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | head -5
             else
                 echo "$result" | head -3
@@ -339,9 +357,12 @@ apply_updates() {
             echo "Updating OS..."
             result=$(run_cmd "$ssh_cmd" "ha os update" "$type")
             cmd_exit=$?
-            if [[ $cmd_exit -ne 0 ]]; then
+            if [[ $cmd_exit -eq 124 || $cmd_exit -eq 255 ]]; then
+                # Timeout or connection lost during update is expected (HA restarts)
+                echo -e "${YELLOW}Connection lost (HA is restarting for update)${NC}"
+            elif [[ $cmd_exit -ne 0 ]]; then
                 had_error=true
-                echo -e "${RED}OS update failed${NC}"
+                echo -e "${RED}OS update failed $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | head -5
             else
                 echo "$result" | head -3
@@ -352,7 +373,7 @@ apply_updates() {
             cmd_exit=$?
             if [[ $cmd_exit -ne 0 ]]; then
                 had_error=true
-                echo -e "${RED}Update failed (exit code $cmd_exit)${NC}"
+                echo -e "${RED}Update failed $(exit_code_msg $cmd_exit)${NC}"
                 [[ -n "$result" ]] && echo "$result" | tail -10
             else
                 echo "$result" | tail -5

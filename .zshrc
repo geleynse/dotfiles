@@ -320,3 +320,10 @@ unset k
 [[ -n "${key[Right]}"   ]]  && bindkey  "${key[Right]}"   forward-char
 #End special key setup
 
+
+# bun completions
+[ -s "/home/alan/.bun/_bun" ] && source "/home/alan/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
