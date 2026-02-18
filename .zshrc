@@ -23,6 +23,7 @@ PROMPT_BRANCH_COLOR=${PROMPT_BRANCH_COLOR:-yellow}
 if [[ -d /opt/local/bin ]] then PATH="/opt/local/bin:$PATH" fi
 if [[ -d $HOME/opt/bin ]] then PATH="$PATH:$HOME/opt/bin" fi
 if [[ -d $HOME/bin ]] then PATH="$PATH:$HOME/bin" fi
+if [[ -d $HOME/.local/lib/npm/bin ]] then PATH="$PATH:$HOME/.local/lib/npm/bin" fi
 export PATH
 
 #allow tab completion in the middle of a word
@@ -327,3 +328,6 @@ unset k
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+
+# OpenClaw Completion
+source "/home/alan/.openclaw/completions/openclaw.zsh"
