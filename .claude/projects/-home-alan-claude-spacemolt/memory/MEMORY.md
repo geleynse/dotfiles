@@ -48,6 +48,8 @@
 - **Push event response corruption** (fixed): Game server push events (combat_update, chat, etc.) were consumed as command responses in FIFO queue, causing one-request-lag in results. Fixed with PUSH_EVENT_TYPES filter in game-client.ts.
 - **Contamination feedback loop**: Agents write false claims ("navigation frozen") to diary/strategy docs → docs injected at next turn start → agent reads them and reinforces. Captain's log is auto-redacted by proxy, but docs are NOT. Fix: `spacemolt-fleet decontaminate` + add anti-contamination callouts to agent prompts.
 - **Craft cache staleness**: Agents call craft() successfully, immediately check cargo (stale cache), conclude crafting is broken. Fixed by passthrough tick wait — craft is in STATE_CHANGING_TOOLS so cache refreshes before response returns.
+- **Jump silent failure (FIXED)**: Root cause was param name mismatch — our proxy exposed `system_id` but game wants `target_system`. Game accepted wrong params as "pending" then silently failed via `action_error` push event (which we weren't handling). Fixed with: param remapping in passthrough handler (`PARAM_REMAPS` in schema.ts), added `action_result`/`action_error` + 11 other missing push event types. Proxy still has stuck-jump detection + warning injection as safety net.
+- **Sell auto-listing (zero credits)**: v0.103.3 auto_list means sell() with no station demand creates exchange sell orders. multi_sell shows delta=0 in proxy logs. Agents earn nothing. Need agents to use analyze_market() to find stations with actual demand.
 
 ## Proxy Features (action-proxy/src/server.ts)
 - Captain's log decontamination: `decontaminateLog()` redacts entries with `CONTAMINATION_WORDS` array
@@ -56,10 +58,14 @@
 - Per-agent tool blocking: config-driven via `agentDeniedTools` in fleet-config.json
 - Call limits: config-driven via `callLimits` + hardcoded `CALL_LIMITS` map
 - Hallucinated param stripping: deletes `session_id` from game tool args
+- **Parameter remapping**: `PARAM_REMAPS` in schema.ts defines agent→game param names (jump: system_id→target_system, travel: destination_id→target_poi, find_route: destination_system_id→target_system, search_systems: name→query). Applied in passthrough handler before game call. `OUR_SCHEMA_PARAMS` in server.ts mirrors TOOL_SCHEMAS keys for drift detection — keep in sync.
+- **Schema drift detection**: `checkSchemaDrift()` in schema.ts runs at startup, compares our param names vs server inputSchema. Filters `session_id` (proxy-stripped). Logs warnings for real mismatches.
 - get_status is cached (reads from WebSocket state_update), not a game server call
 - **State_update structure**: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
 - Compound tools: batch_mine, travel_to, jump_route, multi_sell
-- **Tick sync (all paths)**: Both compound tools AND passthrough handler now always `waitForTick()` after successful state-changing actions. The passthrough fix (2026-02-19 session 5) covers all 37 tools in `STATE_CHANGING_TOOLS`. Previously only waited on `pending:true`.
+- **Tick sync (all paths)**: Both compound tools AND passthrough handler now always `waitForTick()` after successful state-changing actions. Navigation tools (jump/travel) get double waitForTick().
+- **Auto-undock before jump**: Passthrough handler auto-undocks before jump() — game silently ignores jumps while docked.
+- **Nav diagnostic logging**: jump/travel log before/after system/poi/tick to proxy logs for debugging.
 - Response summarizers: 22 tools have summarizers in `summarizers.ts`
 - **Prompt assembly**: personality-rules.txt references MCP tools (write_diary/write_doc), NOT filesystem paths. Keep in sync when changing note storage.
 - Error hints: pattern-matched contextual hints in `error-hints.ts`
@@ -107,6 +113,17 @@
 - v0.103.9: Travel with base_id fix, attack with POI_id fix (minor)
 - v0.103.11: MCP auto-reconnect after server restarts (helps proxy WebSocket stability)
 - v0.104.0: analyze_market redesigned — no params, returns skill-based trading insights. market_analysis skill retired. Terminology: "station exchange" + "station manager" (not "NPC market").
+- v0.104.3: analyze_market no longer counts your own buy orders as demand signals. Order warnings capped at 3+summary. Master traders (8+) see full remote price ladders.
+- v0.105.0: **Major response size reduction.** get_status no longer includes map/XP/log. Dock briefings capped (5 facilities, 20 fills/orders). get_map paginated (100/page). Player lists capped at 20.
+- v0.106.0: **Fleet Overhaul.** 268 empire-specific ships across 5 tiers. Empire shipyards (shipyard_showroom, commission_ship, claim_commission). Ship exchange (list_ship_for_sale, browse_ships, buy_listed_ship). 20 new crafting components. Old generic ships retired. get_ships retired → use shipyard_showroom.
+- v0.106.4: Playstyle guide references in skill.md (miner, trader, pirate hunter, explorer, base builder).
+- v0.107.0: MCP Apps (V2 only) — visual UI widgets. Not relevant to our V1 MCP agents.
+- v0.107.1: `get_guide()` — fetch progression guides (miner, trader, pirate-hunter, explorer, base-builder) via MCP.
+- v0.108.0: `catalog` on V1 MCP (ships, items, skills, recipes with search/pagination). `get_recipes` and `get_ships` REMOVED. Recipe dependency analysis (full bill of materials).
+- v0.109.0: `commission_quote` — preview ship commission costs. Ship help text improved.
+- v0.109.6: Craft results show bonus items with `outputs` array. install_mod cargo fix.
+- v0.113.0: MCP tool annotations (readOnlyHint, destructiveHint, idempotentHint). Protocol compliance fixes.
+- v0.115.0: MCP App widget fixes (V2 only — session accumulation, auto-fetch, no session_id needed). No V1 impact.
 - Tool names differ from patch notes — always verify via proxy test output
 
 ## OAuth Token Management
