@@ -1,5 +1,11 @@
 # SpaceMolt Project Memory
 
+## Project TODO
+- **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
+- Numbered items (#1-#54+), strikethrough + **DONE** when completed
+- Keep up to date: mark items done when completing work, add new items for follow-up work
+- Check TODO.md at session start to see what's pending
+
 ## Claude Code Custom Commands
 - Custom slash commands go in `.claude/commands/`, NOT `.claude/skills/`
 - No YAML frontmatter — filename is the command name
@@ -62,7 +68,7 @@
 - **Schema drift detection**: `checkSchemaDrift()` in schema.ts runs at startup, compares our param names vs server inputSchema. Filters `session_id` (proxy-stripped). Logs warnings for real mismatches.
 - get_status is cached (reads from WebSocket state_update), not a game server call
 - **State_update structure**: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
-- Compound tools: batch_mine, travel_to, jump_route, multi_sell
+- Compound tools: batch_mine, travel_to, jump_route, multi_sell, scan_and_attack
 - **Tick sync (all paths)**: Both compound tools AND passthrough handler now always `waitForTick()` after successful state-changing actions. Navigation tools (jump/travel) get double waitForTick().
 - **Auto-undock before jump**: Passthrough handler auto-undocks before jump() — game silently ignores jumps while docked.
 - **Nav diagnostic logging**: jump/travel log before/after system/poi/tick to proxy logs for debugging.
