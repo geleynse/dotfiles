@@ -29,6 +29,17 @@
 - **HA API + stdin**: Use heredoc (`<< 'PYEOF'`) or save to file; can't pipe JSON into python while reading script from stdin.
 - **Bash escaping**: Don't use `\!` in python strings inside bash heredocs. Use single-quoted heredocs.
 
+## Immich (Google Photos replacement)
+
+- **VM 106** on Proxmox, IP **192.168.1.12**, Web UI on port 2283
+- **SSH**: `ssh alan@192.168.1.12`, Docker Compose at `/home/alan/immich/`
+- **Photo storage**: NFS mount from NAS → `/mnt/nas/photos` (`192.168.1.3:/photos`)
+- **Upload tool**: `~/immich-go` on NAS (192.168.1.3), uses `--folder-as-album=FOLDER`
+- **API keys**: Hashed in DB (`api_key` table), must generate new in UI if lost
+- **QEMU guest agent**: Not installed (enabled in Proxmox config but missing in guest)
+- **NAS has no curl** — test API from local machine or Immich VM
+- **Google Takeout project**: `projects.google-takeout.md` — tracks full pipeline status
+
 ## 3D Printing (CR-10 V3 / Klipper / OrcaSlicer)
 
 - **Printer**: CR-10 V3 at 192.168.1.5, Moonraker API on :7125

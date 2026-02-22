@@ -9,7 +9,7 @@
 - Slash commands: `.claude/commands/` (no YAML frontmatter, filename = command name)
 - Skills: `.claude/skills/` (YAML frontmatter with name/description)
 - `.claude/*` with `!.claude/commands/` and `!.claude/skills/` in gitignore
-- **`fleet-improve-loop` skill**: Continuous improvement cycle — invokes `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to 5 iterations.
+- **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. Single skill at `.claude/commands/fleet-manage.md`.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
 
 ## Fleet Script Gotchas
@@ -40,6 +40,8 @@
 - get_status is cached (WebSocket state_update), not a game server call. Structure: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
 - Compound tools: batch_mine, travel_to, jump_route, multi_sell, scan_and_attack
 - All state-changing tools get `waitForTick()`. Nav tools (jump/travel) get double. Auto-undock before jump.
+- **Nav timing logs**: travel_to, jump_route, and passthrough jump/travel all log elapsed ms per step. Check proxy logs to diagnose cache lag vs actual nav delays.
+- **travel_to returns `docked_at_base`**: `location_after.docked_at_base` is null if POI has no base. Proxy emits a warning. Agents must check before calling get_missions().
 - personality-rules.txt references MCP tools (write_diary/write_doc), NOT filesystem paths.
 - DENIED_TOOLS in schema.ts: ~73 tools blocked. All proxy features documented in common-rules.txt PROXY FEATURES — keep in sync.
 - Snapshot analysis: agents data is a list (not dict), access via `data['agents'][i]`.
@@ -61,7 +63,7 @@
 - SOCKS proxies (1081/1082) only route game WebSocket, NOT Claude API calls
 
 ## Game Version Notes
-- Current: v0.115+. Key changes already handled in proxy/prompts.
+- Current: v0.123+. Key changes already handled in proxy/prompts.
 - `catalog` replaced `get_recipes`/`get_ships` (v0.108). Ship tools: shipyard_showroom, commission_ship/quote, browse_ships, buy_listed_ship.
 - analyze_market: no params, skill-based insights (v0.104). Terminology: "station exchange" + "station manager".
 - Tool names differ from patch notes — always verify via proxy test output.
