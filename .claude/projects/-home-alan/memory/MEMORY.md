@@ -43,7 +43,9 @@
 - **Immich DB**: `docker exec immich_postgres psql -U postgres -d immich` — table is `asset` (not `assets`), join `asset_exif` on `assetId`
 - **Date fix pattern**: Match misdated assets by `fileSizeInByte` to Takeout source files, read JSON sidecar `photoTakenTime.timestamp`, update via `PUT /api/assets/{id}` with `{"dateTimeOriginal": "ISO8601"}`
 - **NAS Takeout path**: `/srv/dev-disk-by-uuid-7853de9f-1477-492b-85da-730f15d2aa61/google-takeout/`
+- **NAS organized data**: `.../google-takeout/organized/{account1,account2,merged}/` — all non-photo Takeout data organized (2026-02-22). Extracted dirs deleted, raw .tgz kept.
 - **exiftool**: Installed on Immich VM (192.168.1.12), also on NAS. Not on local machine.
+- **NAS has no rclone** — run rclone from laptop using `nas:` SFTP remote
 
 ## 3D Printing (CR-10 V3 / Klipper / OrcaSlicer)
 
@@ -58,7 +60,8 @@
 - **Alan's attorney**: Danielle Ashcraft, Goldberg Jones
 - **Opposing**: Sherwood Family Law (P. Daniel Strausbaugh, for Brittney)
 - **Local docs**: `~/Documents/private/financial/` and `~/Documents/private/tax/`
-- **rclone remotes**: `gdrive` (Google Drive readonly), `dropbox`
+- **rclone remotes**: `gdrive` (Google Drive acct1, readonly), `dropbox`, `nas` (SFTP to 192.168.1.3), `wasabi`, `wasabi-east`
+- **rclone-gdrive.timer**: Daily 3 AM, syncs `gdrive:` → NAS `organized/account1/drive-sync/` via `nas:` remote
 - **Tax filing**: WA (no income tax) 2023-2024; OR since Aug 2025. 2025 = MFS. OR-40-P partial-year.
 - **Tax preparer**: Yelena Stepanyan (818-568-0380)
 - **A&B Toys LLC**: Brittney's business, closed 2025, declared bankruptcy. Bookkeeper: Vivian.
