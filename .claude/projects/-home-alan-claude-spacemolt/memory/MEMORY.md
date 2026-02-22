@@ -30,7 +30,7 @@
 - **Gas cloud mining yields zero ore**: Only asteroid belts (POIs with "belt"/"harvesters") produce ore.
 - **multi_sell pending at scale**: 120+ qty saturates tick queue. Items safe (returned to storage), but credits stall.
 - **Sell auto-listing (zero credits)**: sell() with no demand creates exchange orders, delta=0. Agents must use analyze_market() first.
-- **Haiku verbosity**: 23-149 long texts per 10 turns. Not a major cost driver — deprioritize vs economic cycle fixes. Forbidden words list is 52 words (hallucination keywords).
+- **Haiku verbosity**: 23-149 long texts per 10 turns. Not a major cost driver — deprioritize vs economic cycle fixes. Forbidden words list is ~52 words (hallucination keywords + nav false-positives like "loop", "still at", "cache lag", "stale").
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
 - When all agents share the same bug, check common-rules.txt first.
 
