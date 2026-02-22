@@ -39,6 +39,11 @@
 - **QEMU guest agent**: Not installed (enabled in Proxmox config but missing in guest)
 - **NAS has no curl** — test API from local machine or Immich VM
 - **Google Takeout project**: `projects.google-takeout.md` — tracks full pipeline status
+- **API key**: `PiCw4GwGWmRrYzFROVKq3BhyiS4PQJZ89Ff2yV6Vc`
+- **Immich DB**: `docker exec immich_postgres psql -U postgres -d immich` — table is `asset` (not `assets`), join `asset_exif` on `assetId`
+- **Date fix pattern**: Match misdated assets by `fileSizeInByte` to Takeout source files, read JSON sidecar `photoTakenTime.timestamp`, update via `PUT /api/assets/{id}` with `{"dateTimeOriginal": "ISO8601"}`
+- **NAS Takeout path**: `/srv/dev-disk-by-uuid-7853de9f-1477-492b-85da-730f15d2aa61/google-takeout/`
+- **exiftool**: Installed on Immich VM (192.168.1.12), also on NAS. Not on local machine.
 
 ## 3D Printing (CR-10 V3 / Klipper / OrcaSlicer)
 
