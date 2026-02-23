@@ -48,6 +48,10 @@
 - drifter-gale enabled for A/B testing. Proxy logs `[yaml]` with byte savings per response.
 - Responses that bypass `withInjections()` (errors, doc tools) stay JSON — they're tiny.
 
+## Proxy Code Structure Gotchas
+- `createSapServer` (v1) and `createSapServerV2` (v2) are separate function scopes in server.ts. Helper functions defined inside one are NOT accessible from the other. Shared helpers must be at module level (before the exports). This caused a build failure with `throttledPersistGameState`.
+- Both v1 and v2 need identical wiring for persistence, events, guardrails. When adding persistence calls, always grep for the v2 equivalent and add there too.
+
 ## Proxy Key Gotchas
 - `PARAM_REMAPS` in schema.ts: jump→target_system, travel→target_poi, find_route→target_system, search_systems→query. `OUR_SCHEMA_PARAMS` in server.ts must stay in sync.
 - `checkSchemaDrift()` runs at startup — compares our params vs server, logs mismatches.
