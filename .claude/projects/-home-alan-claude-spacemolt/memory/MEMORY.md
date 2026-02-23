@@ -143,5 +143,15 @@
 - **sm-cli** (vcarl, 137 commits): Most active CLI. Battle, facility (14 subcmds), catalog with recipe trace, hierarchical commands.
 - **commander** (official, v0.2.11): YAML-over-JSON for token savings. Dynamic OpenAPI schema. Single "game" meta-tool. No changes since Feb 21 — may be superseded by admiral.
 
+## Fleet-Web Visual Overhaul (Planned)
+- Design: `docs/plans/2026-02-23-fleet-web-overhaul-design.md`
+- Plan: `docs/plans/2026-02-23-fleet-web-overhaul-plan.md` (18 tasks, 6 phases)
+- Stack: React 19 + Next.js 15 (static export) + Tailwind + shadcn/ui + SMUI theme
+- Galaxy map: react-force-graph-2d, 505 systems, system drill-down with POIs
+- Charts: recharts (replaces Chart.js)
+- Model assignments: Opus (2 tasks: init + galaxy map), Sonnet (8 tasks), Haiku (8 tasks). ~755k tokens total.
+- Hono backend stays unchanged. Next.js `output: 'export'` to `out/`, served by Hono.
+- `deploy-all` now self-rebuilds fleet-cli at start (non-fatal). Fixes stale dist/ bootstrapping issue.
+
 ## Reference Files
 - `action-proxy/CLAUDE.md`, `fleet-agents/CLAUDE.md`, `fleet-web/CLAUDE.md` — keep updated on arch changes
