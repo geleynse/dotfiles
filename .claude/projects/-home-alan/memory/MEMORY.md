@@ -51,8 +51,10 @@
 
 - **Printer**: CR-10 V3 at 192.168.1.5, Moonraker API on :7125
 - **OrcaSlicer CLI**: Always use `--orient 1`, check unprintability score. `inherits` doesn't resolve. Bed temp needs ALL plate-type keys set.
-- **Slice configs**: `~/projects/cad/3d/orca-cli/`
+- **Slice configs**: `~/projects/cad/3d/orca-cli/` — `filament-pla.json`, `filament-petg.json`
+- **PLA settings**: 205C/60C, PA 0.016, 100% fan (Amazon Basics purple)
 - **PETG settings**: 235C/90C, retraction 1.0mm@45mm/s, PA 0.030
+- **Switching filament**: Change `pressure_advance` in `printer.cfg` (comment has both values)
 
 ## Divorce / Legal
 
