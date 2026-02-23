@@ -25,6 +25,8 @@
 - **npm EACCES fix**: `npm config set prefix ~/.local/lib/npm`, add bin to PATH. Already applied.
 - **eza vs ls**: System has `eza` aliased to `ls`. Use `ls --sort=time` for time-sorted listings.
 - **doas vs sudo**: System uses `doas` not `sudo`. Homebrew wrapper strips unsupported flags.
+- **signal-cli**: Registered on +19712020992 (Google Voice), profile "Alan CLI". Config at `~/.local/share/signal-cli/data/`
+- **openclaw**: Auth synced from Claude Code OAuth via `sync-openclaw-auth.timer` (hourly). Model: `anthropic/claude-haiku-4-5-20251001`. Config at `~/.openclaw/`
 - **Homebrew**: `/home/linuxbrew/.linuxbrew`, shellenv in `.zshrc_local`
 - **HA API + stdin**: Use heredoc (`<< 'PYEOF'`) or save to file; can't pipe JSON into python while reading script from stdin.
 - **Bash escaping**: Don't use `\!` in python strings inside bash heredocs. Use single-quoted heredocs.
