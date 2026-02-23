@@ -2,14 +2,14 @@
 
 ## Project TODO
 - **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#69+), strikethrough + **DONE** when completed
+- Numbered items (#1-#80+), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
 ## Claude Code Custom Commands & Skills
 - Slash commands: `.claude/commands/` (no YAML frontmatter, filename = command name)
 - Skills: `.claude/skills/` (YAML frontmatter with name/description)
 - `.claude/*` with `!.claude/commands/` and `!.claude/skills/` in gitignore
-- **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. Single skill at `.claude/commands/fleet-manage.md`.
+- **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Creates a worktree for isolation, runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. At end, presents merge/PR/discard/keep options. Single skill at `.claude/commands/fleet-manage.md`.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
 
 ## Fleet Script Gotchas
@@ -32,6 +32,7 @@
 - **Sell auto-listing (zero credits)**: sell() with no demand creates exchange orders, delta=0. Agents must use analyze_market() first.
 - **Haiku verbosity**: 23-149 long texts per 10 turns. Not a major cost driver — deprioritize vs economic cycle fixes. Forbidden words list is ~52 words (hallucination keywords + nav false-positives like "loop", "still at", "cache lag", "stale").
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
+- **Navigation loops**: Agents repeatedly jumping between same 2-3 systems. Anti-loop rule added to common-rules.txt (max 2 visits per system per session). May need proxy-level enforcement if prompt pressure insufficient.
 - When all agents share the same bug, check common-rules.txt first.
 
 ## Proxy Key Gotchas
@@ -93,6 +94,14 @@
 - Bug fixes vs old: `??` instead of `or` for 0-credit handling, improve files excluded from prev_snap, pruning only counts real snapshots
 - 49 tests (13 config + 17 parser + 19 summary). `npx spacemolt-fleet help` works.
 - Forbidden words list is 52 words (not 34 — MEMORY.md was outdated)
+- **Worktree support**: `config.ts` uses `git rev-parse --show-toplevel` via `execFileSync` for all paths except SNAPSHOTS_DIR (always main repo). `spacemolt-fleet sync/deploy` from a worktree uses that worktree's files automatically.
+
+## Competitor Clients
+- Client comparison at `~/Dendron/vault.personal/projects.spacemolt.client-comparison.md` — 9 clients analyzed
+- **botrunner** (humbrol2): Hybrid scripted bots + LLM. 10 deterministic routines at zero LLM cost. Coordinator meta-bot uses public `https://game.spacemolt.com/api/market` for fleet optimization. Local pathfinding via `GET /api/map`. High throughput threat.
+- **SpaceMolt_User** (leopoko, v1.3.2): Full web GUI. Reveals PvP battle zones (outer/mid/inner/engaged), player-to-player trading, facilities with rent, action loops. Good reference for game mechanics.
+- **sm-cli** (vcarl, 137 commits): Most active CLI. Battle, facility (14 subcmds), catalog with recipe trace, hierarchical commands.
+- **commander** (official, v0.2.11): YAML-over-JSON for token savings. Dynamic OpenAPI schema. Single "game" meta-tool.
 
 ## Reference Files
 - `action-proxy/CLAUDE.md`, `fleet-agents/CLAUDE.md`, `fleet-web/CLAUDE.md` — keep updated on arch changes
