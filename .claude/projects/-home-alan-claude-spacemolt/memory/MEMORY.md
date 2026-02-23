@@ -2,7 +2,7 @@
 
 ## Project TODO
 - **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#82), strikethrough + **DONE** when completed
+- Numbered items (#1-#84), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
 ## Claude Code Custom Commands & Skills
@@ -12,7 +12,7 @@
 - **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Creates a worktree for isolation, runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. At end, presents merge/PR/discard/keep options. Single skill at `.claude/commands/fleet-manage.md`.
 - **Worktree gotcha**: If other agents clean up worktrees mid-session, fleet-manage's worktree can disappear. The prompt changes will still be synced to LXC but the git branch/commits are lost. Consider committing to main directly for fleet-manage sessions, or protect the worktree.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
-- **Improve turn counting**: Uses `/tmp/improve-start-marker` on LXC + `find -newer`. If marker fails, caps at expected turns from duration (duration/interval + 2). Fixed 2026-02-22 — old code had `head -20` fallback that counted historical turns.
+- **Improve turn counting**: Uses `/tmp/improve-start-marker` on LXC + `find -newer`. If marker fails, caps at expected turns from duration (duration/interval + 2). Fixed 2026-02-22 — old code had `head -20` fallback that counted historical turns. **Per-agent counts** now passed to analyze (was passing maxTurns for all agents, inflating data for agents with fewer turns like drifter-gale).
 
 ## Fleet Script Gotchas
 - Large text to `jq` via `--rawfile`/`--slurpfile` with temp files, NOT `--arg` (ARG_MAX)
@@ -32,9 +32,9 @@
 - **Gas cloud mining yields zero ore**: Only asteroid belts (POIs with "belt"/"harvesters") produce ore.
 - **multi_sell pending at scale**: 120+ qty saturates tick queue. Items safe (returned to storage), but credits stall.
 - **Sell auto-listing (zero credits)**: FIXED (#69). Proxy gates multi_sell on prior analyze_market call via calledTools tracking in AgentCallTracker. Still happening at prompt level — sable-thorn had 3 zero-demand sells in iteration 7.
-- **Haiku verbosity**: 23-149 long texts per 10 turns. Not a major cost driver — deprioritize vs economic cycle fixes. Forbidden words list is ~52 words (hallucination keywords + nav false-positives like "loop", "still at", "cache lag", "stale").
+- **Verbosity**: Iteration 8 (20 turns): 507 verbose texts, 465 forbidden words across all 5 agents. cinder-wake worst (174 verbose, $5.21). All agents now on Sonnet — should improve.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
-- **Navigation loops**: Agents repeatedly jumping between same 2-3 systems. Anti-loop rule in common-rules.txt (max 2 visits per system per session). Prompt pressure NOT sufficient after 7 iterations — proxy-level enforcement needed. Per-agent loops: cinder sol↔sirius, sable krynn↔blood_forge, rust nexus↔sirius, lumen market_prime↔haven, drifter sirius↔sol↔nexus.
+- **Navigation loops**: Iteration 8 data was inflated (20 turns pulled for agents with only 3 new turns). Fix deployed — per-agent turn counts. Re-evaluate after clean data in iteration 9.
 - **25% empty sessions**: Server downtime ate 25/100 turns in iteration 7. lumen-shoal worst (8/20 empty).
 - **Captain's log compliance poor**: 9-13 of 20 sessions missing captains_log_add per agent. May need proxy enforcement.
 - **Forbidden word "sync" false positive**: rust-vane hits "sync" 34x because a system is literally named "sync". Consider exempting system names from forbidden word counting.
@@ -45,7 +45,7 @@
 - `format-result.ts` has `formatForAgent()`, `reformatResponse()` in server.ts wraps with try/catch
 - Applied at `withInjections()` in both v1 and v2 paths — final formatting before MCP transport
 - `yaml` npm package (v2) uses YAML 1.2 schema — no coercion of "yes"/"no"/"null" strings
-- drifter-gale enabled for A/B testing. Proxy logs `[yaml]` with byte savings per response.
+- **All agents enabled** (iteration 8+, was drifter-gale only for A/B). Proxy logs `[yaml]` with byte savings per response.
 - Responses that bypass `withInjections()` (errors, doc tools) stay JSON — they're tiny.
 
 ## Proxy Code Structure Gotchas
@@ -61,7 +61,7 @@
 - **battleCache**: DONE (#56). `Map<string, BattleState | null>` in SharedState. Populated from combat_update events and scan_and_attack loop. Cleared after battle ends.
 - **Respawn detection**: DONE (#56). `player_died` sets pendingDeathEnrichment flag; next state_update injects synthetic `respawn_state` critical event with post-respawn location/hull/credits.
 - **Schema drift fixes**: DONE (#54). 9 tools fixed. Drift down to 2 (get_system/get_poi with intentional optional extras).
-- **Sable-thorn on Sonnet**: Model upgraded from Haiku. #41 Sonnet experiment is live.
+- **All agents on Sonnet** (iteration 8+). Was: drifter/rust/lumen on Haiku, sable/cinder on Sonnet.
 - All state-changing tools get `waitForTick()`. Nav tools: arrival_tick-aware cache wait (up to 8 ticks for jump, 1 for travel). Auto-undock before jump.
 - **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `state_update` shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
 - **test-nav.ts**: Diagnostic script connecting directly to game WebSocket to test jump protocol. Used to discover the arrival_tick mechanism.
@@ -114,7 +114,7 @@
 ## Fleet CLI Rewrite (#11)
 - New TypeScript CLI at `fleet-cli/` (npm package name: `spacemolt-fleet`), workspace sibling to action-proxy/fleet-web
 - Root `package.json` with npm workspaces, `tsconfig.base.json` shared config
-- All 31 subcommands ported across 9 steps. Original bash script at `scripts/spacemolt-fleet` preserved.
+- All 31 subcommands ported. Old bash script removed from repo root (was causing worktree config issues).
 - JSONL parser (183 lines) + summary generator (429 lines) — faithful port with 3 bug fixes over Python original
 - Bug fixes vs old: `??` instead of `or` for 0-credit handling, improve files excluded from prev_snap, pruning only counts real snapshots
 - 78 tests (13 config + 17 parser + 19 summary + 12 health parsers + 17 output). `npx spacemolt-fleet help` works.

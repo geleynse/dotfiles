@@ -36,6 +36,7 @@
 - **Photo storage**: NFS mount from NAS → `/mnt/nas/photos` (`192.168.1.3:/photos`)
 - **Upload tool**: `~/immich-go` on NAS (192.168.1.3), uses `--folder-as-album=FOLDER`
 - **API keys**: Hashed in DB (`api_key` table), must generate new in UI if lost
+- **External URL**: `photos.ra726.net` via Cloudflare Tunnel (Cloudflare Access auth breaks Immich app — mobile sync is local-only)
 - **QEMU guest agent**: Not installed (enabled in Proxmox config but missing in guest)
 - **NAS has no curl** — test API from local machine or Immich VM
 - **Google Takeout project**: `projects.google-takeout.md` — tracks full pipeline status
@@ -81,7 +82,7 @@
 - **Password hash**: `3ea4d6cf3e47b0ed8844cb028eb3f2c07ed3b253e0c0982b79a2225b35658506`
 - **Primary directive**: Manage the faction autonomously. Grow skills of all members.
 - **Data files**: `~/claude/spacemolt/` — see spacemolt project memory for fleet/proxy/deployment details
-- **Fleet management**: `~/scripts/spacemolt-fleet` (status/start/stop/restart/logs/cost/sync)
+- **Fleet management**: `npx spacemolt-fleet` from `~/claude/spacemolt/` (TypeScript CLI at `fleet-cli/`). Old bash script and `~/scripts/spacemolt-fleet` symlink are defunct.
 - **Fleet agents**: 5 agents on Proxmox LXC 200, all Claude backends. Config at `~/claude/spacemolt/fleet-agents/`
 - **Fleet tests**: `make test` from `~/claude/spacemolt/`
 
