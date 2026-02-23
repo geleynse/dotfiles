@@ -11,6 +11,7 @@
 - `.claude/*` with `!.claude/commands/` and `!.claude/skills/` in gitignore
 - **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Creates a worktree for isolation, runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. At end, presents merge/PR/discard/keep options. Single skill at `.claude/commands/fleet-manage.md`.
 - **Worktree gotcha**: If other agents clean up worktrees mid-session, fleet-manage's worktree can disappear. The prompt changes will still be synced to LXC but the git branch/commits are lost. Consider committing to main directly for fleet-manage sessions, or protect the worktree.
+- **Old bash script conflict**: The repo root `spacemolt-fleet` was the old 126k bash script. It shadowed the TS CLI (`npx spacemolt-fleet`) and didn't support worktrees — reading config from its own directory, not `git rev-parse --show-toplevel`. Deleted in iteration 8. If a similar issue recurs, check `which spacemolt-fleet` and `file $(which spacemolt-fleet)`.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
 - **Improve turn counting**: Uses `/tmp/improve-start-marker` on LXC + `find -newer`. If marker fails, caps at expected turns from duration (duration/interval + 2). Fixed 2026-02-22 — old code had `head -20` fallback that counted historical turns. **Per-agent counts** now passed to analyze (was passing maxTurns for all agents, inflating data for agents with fewer turns like drifter-gale).
 
@@ -32,9 +33,11 @@
 - **Gas cloud mining yields zero ore**: Only asteroid belts (POIs with "belt"/"harvesters") produce ore.
 - **multi_sell pending at scale**: 120+ qty saturates tick queue. Items safe (returned to storage), but credits stall.
 - **Sell auto-listing (zero credits)**: FIXED (#69). Proxy gates multi_sell on prior analyze_market call via calledTools tracking in AgentCallTracker. Still happening at prompt level — sable-thorn had 3 zero-demand sells in iteration 7.
-- **Verbosity**: Iteration 8 (20 turns): 507 verbose texts, 465 forbidden words across all 5 agents. cinder-wake worst (174 verbose, $5.21). All agents now on Sonnet — should improve.
+- **Verbosity**: SOLVED by switching to Sonnet. Haiku: 507 verbose texts, 465 forbidden words. Sonnet: 0 verbose, 1-13 forbidden. No further prompt pressure needed.
+- **Sonnet throughput vs Haiku**: Haiku=~100 turns/10min, Sonnet=~13 turns/30min (~10x slower). Sonnet costs less per run ($8 vs $16) but earns less credits. User chose Sonnet for quality.
+- **Sonnet zero economic activity**: Sonnet agents explore but don't mine/sell. Prompts updated to enforce economic cycle — needs further testing.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
-- **Navigation loops**: Iteration 8 data was inflated (20 turns pulled for agents with only 3 new turns). Fix deployed — per-agent turn counts. Re-evaluate after clean data in iteration 9.
+- **Navigation loops**: Resolved — was inflated data from analyzing old turns. Per-agent turn counting fix deployed. Not a real issue.
 - **25% empty sessions**: Server downtime ate 25/100 turns in iteration 7. lumen-shoal worst (8/20 empty).
 - **Captain's log compliance poor**: 9-13 of 20 sessions missing captains_log_add per agent. May need proxy enforcement.
 - **Forbidden word "sync" false positive**: rust-vane hits "sync" 34x because a system is literally named "sync". Consider exempting system names from forbidden word counting.
