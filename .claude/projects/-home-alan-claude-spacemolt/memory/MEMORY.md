@@ -2,7 +2,7 @@
 
 ## Project TODO
 - **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#95), strikethrough + **DONE** when completed
+- Numbered items (#1-#97), strikethrough + **DONE** when completed
 - Quick wins sprint DONE (2026-02-23): #88 deploy-all, #89 tool call logging, #90 jump_route pathfinding, #92 cargo size, #93 facility exposure, #94 search_changelog, #95 supply_commission
 - Check TODO.md at session start to see what's pending
 
@@ -67,7 +67,7 @@
 - **battleCache**: DONE (#56). `Map<string, BattleState | null>` in SharedState. Populated from combat_update events and scan_and_attack loop. Cleared after battle ends.
 - **Respawn detection**: DONE (#56). `player_died` sets pendingDeathEnrichment flag; next state_update injects synthetic `respawn_state` critical event with post-respawn location/hull/credits.
 - **Schema drift fixes**: DONE (#54). 9 tools fixed. Drift down to 2 (get_system/get_poi with intentional optional extras).
-- **All agents on Sonnet** (iteration 8+). Was: drifter/rust/lumen on Haiku, sable/cinder on Sonnet.
+- **Most agents on Sonnet** (iteration 8+). Was: drifter/rust/lumen on Haiku, sable/cinder on Sonnet. Cinder-wake now on Codex (experimental, 2026-02-23). Codex does NOT support YAML tool results — cinder has no `toolResultFormat` in config. If Codex underperforms, switch back to Sonnet with `toolResultFormat: "yaml"`.
 - All state-changing tools get `waitForTick()`. Nav tools: arrival_tick-aware cache wait (up to 8 ticks for jump, 1 for travel). Auto-undock before jump.
 - **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `state_update` shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
 - **test-nav.ts**: Diagnostic script connecting directly to game WebSocket to test jump protocol. Used to discover the arrival_tick mechanism.
@@ -84,6 +84,8 @@
 - Build locally, deploy compiled JS: `spacemolt-fleet server deploy`
 - **`spacemolt-fleet deploy-all`**: server deploy + sync prompts + server restart. Self-rebuilds fleet-cli first (non-fatal).
 - **deploy-all gotcha**: If you add a new CLI command, the *current* process still runs stale code — the self-rebuild only helps the *next* run. After adding commands, do `npm run build` in fleet-cli/ manually or run deploy-all twice.
+- **Stale process gotcha**: `server stop` now kills legacy `action-proxy` tmux session + `pkill -f 'node dist/index.js'`. Before this fix (2026-02-23), stale processes could hold port 3100, causing new deploys to serve 404 on all routes while health endpoint still worked (MCP router on old process).
+- **Debugging deploy 404s**: If all routes return 404 but `/health` works, check `ps aux | grep "node dist"` for multiple node processes. Kill all and restart.
 - Sync prompts only: `spacemolt-fleet sync` (no restart needed)
 - Server restart needed after fleet-config.json routing/tool changes
 
@@ -145,15 +147,27 @@
 - **sm-cli** (vcarl, 137 commits): Most active CLI. Battle, facility (14 subcmds), catalog with recipe trace, hierarchical commands.
 - **commander** (official, v0.2.11): YAML-over-JSON for token savings. Dynamic OpenAPI schema. Single "game" meta-tool. No changes since Feb 21 — may be superseded by admiral.
 
-## Fleet-Web Visual Overhaul (Planned)
+## Fleet-Web Visual Overhaul (DONE 2026-02-23)
 - Design: `docs/plans/2026-02-23-fleet-web-overhaul-design.md`
 - Plan: `docs/plans/2026-02-23-fleet-web-overhaul-plan.md` (18 tasks, 6 phases)
-- Stack: React 19 + Next.js 15 (static export) + Tailwind + shadcn/ui + SMUI theme
-- Galaxy map: react-force-graph-2d, 505 systems, system drill-down with POIs
-- Charts: recharts (replaces Chart.js)
-- Model assignments: Opus (2 tasks: init + galaxy map), Sonnet (8 tasks), Haiku (8 tasks). ~755k tokens total.
-- Express backend (post-merge #12). Next.js `output: 'export'` to `out/`, served by Express static.
-- `deploy-all` now self-rebuilds fleet-cli at start (non-fatal). Fixes stale dist/ bootstrapping issue.
+- Stack: React 19 + Next.js 15 (static export) + Tailwind CSS 4 + SMUI theme (Nord palette)
+- Galaxy map: react-force-graph-2d, 505 systems, 5 faction colors (solarian/crimson/nebula/outerrim/voidborn)
+- Next.js `output: 'export'` to `dist/public/`, served by Express static
+- Build: `npm run build` = `build:server` (esbuild) + `build:client` (next build)
+- Separate tsconfigs: `tsconfig.json` (server/esbuild), `tsconfig.next.json` (React/Next.js)
+- `deploy-all` now self-rebuilds fleet-cli at start (non-fatal)
+
+## Fleet-Web UI Gotchas
+- **Diary API fields**: Returns `{ id, entry, created_at }` not `{ timestamp, content }`. diary-viewer.tsx and notes/page.tsx must use correct field names.
+- **DB timestamps lack timezone**: SQLite timestamps like `"2026-02-24 01:19:17"` need `T` + `Z` appended for correct UTC parsing in browser. Without this, `new Date()` interprets ambiguously → "just now" for old entries.
+- **Contrast stacking**: Never combine `text-muted-foreground` with `opacity-*` — the compound effect makes text invisible on dark backgrounds. Current `muted-foreground: #b0bbd0` gives ~7:1 on card bg (#242933).
+- **Map hit areas must scale with zoom**: `nodePointerAreaPaint` needs `minScreenPx / globalScale` same as visual dots, otherwise hit area shrinks below dot size when zoomed out.
+- **Game factions**: 5 factions in map data: solarian, crimson, nebula, outerrim, voidborn (+ empty string for neutral). Must all be in EMPIRE_COLORS.
+- **Static export routing**: Next.js `output: 'export'` generates `comms.html` etc. Express needs `extensions: ['html']` in `express.static()` or routes fall through to SPA fallback (serves index.html/dashboard for all routes).
+- **API↔frontend shape mismatch**: `game-state.ts` `flatten()` must return structure matching frontend `AgentGameState` interface (nested `ship: {...}`, field names `current_system`/`current_poi`/`docked_at_base`). Previous flat structure (`ship_name`, `system`, `poi`) caused ship data to never display.
+- **SSE event consistency**: Tool call SSE must send arrays (wrap single records in `[record]`). Backfill must use same event name as live events (`tool_call`, not `backfill`). Frontend guards with `Array.isArray()`.
+- **Comms timeline delivery enrichment**: `getCommsLog()` uses LEFT JOIN to `fleet_orders` to replace "Order #N delivered" with actual order message content.
+- **Hook types must match server types**: `use-fleet-status.ts` defines its own interfaces — these MUST mirror `shared/types.ts` exactly. Key fields: `state` (not `status`), `healthScore` (not `health`), `actionProxy.healthy` (not `proxyHealthy`), `source` (not `note_type`). When adding API fields, update both the server type AND the hook type.
 
 ## Reference Files
 - `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
