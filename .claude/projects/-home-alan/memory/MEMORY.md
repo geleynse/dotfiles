@@ -53,9 +53,10 @@
 ## 3D Printing (CR-10 V3 / Klipper / OrcaSlicer)
 
 - **Printer**: CR-10 V3 at 192.168.1.5, Moonraker API on :7125
-- **OrcaSlicer CLI**: Always use `--orient 1`, check unprintability score. `inherits` doesn't resolve. Bed temp needs ALL plate-type keys set.
+- **OrcaSlicer CLI**: Always use `--orient 1`, check unprintability score. `inherits` doesn't resolve. Bed temp needs ALL plate-type keys set. Use `--load-filaments` for filament JSON (NOT `--load-settings` — machine defaults override filament temps). Use `--outputdir .` (no `--output` flag); output is `plate_1.gcode`.
 - **Slice configs**: `~/projects/cad/3d/orca-cli/` — `filament-pla.json`, `filament-petg.json`
-- **PLA settings**: 205C/60C, PA 0.016, 100% fan (Amazon Basics purple)
+- **PLA settings**: 205C/65C, PA 0.016, 100% fan (Amazon Basics white)
+- **Adhesion notes**: Raft sticks too well on complex parts (heart fidgets). Brim hard to remove on multi-part-touching-bed models. Consider: draft_shield, raft_contact_distance 0.15-0.2mm, or closing closet door for airflow.
 - **PETG settings**: 235C/90C, retraction 1.0mm@45mm/s, PA 0.030
 - **Switching filament**: Change `pressure_advance` in `printer.cfg` (comment has both values)
 
