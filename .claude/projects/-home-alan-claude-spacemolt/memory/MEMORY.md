@@ -2,7 +2,7 @@
 
 ## Project TODO
 - **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#103), strikethrough + **DONE** when completed
+- Numbered items (#1-#110), strikethrough + **DONE** when completed
 - Quick wins sprint DONE (2026-02-23): #88 deploy-all, #89 tool call logging, #90 jump_route pathfinding, #92 cargo size, #93 facility exposure, #94 search_changelog, #95 supply_commission
 - Check TODO.md at session start to see what's pending
 
@@ -37,12 +37,14 @@
 ## Active Issues
 - **Gas cloud mining yields zero ore**: Only asteroid belts (POIs with "belt"/"harvesters") produce ore.
 - **multi_sell pending at scale**: 120+ qty saturates tick queue. Items safe (returned to storage), but credits stall.
+- **~~buy() storage hint~~**: FIXED (#100). Proxy injects hint after buy() telling agent items are in STATION STORAGE. Agent must call withdraw_items + install_mod. Game returns `{command: "buy"}` wrapper — buy hint checks `toolName === "buy"` not response content.
+- **~~commission_status empty~~**: FIXED (#101). Game returns `{command: "commission_status"}` (not empty `{}`). Summarizer now checks emptiness AFTER `pick()` strips non-relevant fields.
 - **Sell auto-listing (zero credits)**: FIXED (#69). Proxy gates multi_sell on prior analyze_market call via calledTools tracking in AgentCallTracker. Still happening at prompt level — sable-thorn had 3 zero-demand sells in iteration 7.
 - **Verbosity**: SOLVED by Sonnet. Verbosity rules scaled back (2026-02-23): removed "OUTPUT RULES" + iteration stats from all agent prompts, simplified Rule 14 in common-rules, fleet-manage skill no longer flags verbosity. Forbidden words kept (hallucination indicators only).
 - **Sonnet throughput vs Haiku**: Haiku=~100 turns/10min, Sonnet=~13 turns/30min (~10x slower). Sonnet costs less per run ($8 vs $16) but earns less credits. User chose Sonnet for quality.
 - **Sonnet zero economic activity**: PARTIALLY FIXED (2026-02-24). Summary generator was reporting MINE=0/SELL=0 due to v2 tool counting bug (checked tool.name not input.action). Real data: agents ARE mining/selling but earning little due to zero-demand sells and mining at wrong POIs.
 - **Summary generator v2 fix**: `getEffectiveToolName()` in summary-generator.ts extracts action from input field for v2 consolidated tools. Without this, MINE/SELL/CRAFT/MISSION columns all show 0.
-- **Sable weapon saga**: Sable bought weapons (buy) but they go to station storage silently. Never called install_mod. Commissioned crimson_levy but commission_status returns `{}`. Diary hallucinated "autocannon equipped" when only mining_laser installed. Drifter bought 2x weapon_cannon_1 but deposit() returns "completed" without moving items. send_gift was never tried despite being the right tool.
+- **Sable weapon saga (partially fixed)**: #100 buy hint + #101 commission_status fix deployed. Sable now knows items go to storage and gets guidance on withdraw+install. Still needs live verification that sable completes the full buy→withdraw→install_mod→scan_and_attack chain.
 - **Snapshot filename sort bug**: Old snapshots use YYYYMMDD format, new use YYYY-MM-DD. Alphabetical sort picks old files as "latest". Fixed with mtime sort in improve.ts.
 - **~~travel_to wrong POI resolution~~**: FIXED (2026-02-24). `poi-resolver.ts` caches POI data from get_system responses. All 4 travel paths (v1/v2 travel_to + passthrough) resolve names to IDs. get_system summarizer now includes POI `id` field.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
@@ -67,7 +69,8 @@
 ## Proxy Key Gotchas
 - `PARAM_REMAPS` in schema.ts: jump→target_system, travel→target_poi, find_route→target_system, search_systems→query. `OUR_SCHEMA_PARAMS` in server.ts must stay in sync.
 - `checkSchemaDrift()` runs at startup — compares our params vs server, logs mismatches.
-- get_status is cached (WebSocket state_update), not a game server call. Structure: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
+- get_status is cached (populated by `refreshStatus()` polling after each tool call, NOT WebSocket push). Structure: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
+- **Schema caching** (#107 DONE): `data/schema-cache.json` caches v1+v2 schemas. `invalidateSchemaCache()` on game version change. Tests must call `invalidateSchemaCache()` in setup/teardown to prevent cross-test pollution.
 - Compound tools: batch_mine, travel_to, jump_route, multi_sell, scan_and_attack, loot_wrecks
 - **scan_and_attack full combat loop**: DONE (#72/#73). Battle polling (MAX_BATTLE_TICKS=30), hull-based stance switching (defensive <30%, flee <20%), auto-loot wrecks after victory. Both v1 and v2 handlers. v2 stance reads `args.stance` first, falls back to `args.id`.
 - **battleCache**: DONE (#56). `Map<string, BattleState | null>` in SharedState. Populated from combat_update events and scan_and_attack loop. Cleared after battle ends.
@@ -76,7 +79,8 @@
 - **All agents on Sonnet** except cinder-wake on **Codex** (gpt-5.3-codex, re-enabled 2026-02-24). Codex does NOT support YAML tool results (rmcp can't parse YAML as JSON-RPC) — cinder has no `toolResultFormat` in config. ~68K tokens/turn, ~87K for longer sessions. If Codex underperforms, switch back to Sonnet with `toolResultFormat: "yaml"`.
 - **deploy-all now deploys loop scripts** (fixed 2026-02-24). Previously only `fleet start` and `improve` called `deployLoopScripts()`. Stale loop scripts on LXC caused Codex smoke test failure.
 - All state-changing tools get `waitForTick()`. Nav tools: arrival_tick-aware cache wait (up to 8 ticks for jump, 1 for travel). Auto-undock before jump.
-- **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `state_update` shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
+- **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `refreshStatus()` poll shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
+- **Bun + npm `ws` incompatibility**: Bundled npm `ws` causes "Unexpected server response: 101" under Bun (101 = successful upgrade). Fix: mark `ws` as external in esbuild so Bun uses its built-in ws polyfill. Full Bun native WS migration deferred to #110.
 - **test-nav.ts**: Diagnostic script connecting directly to game WebSocket to test jump protocol. Used to discover the arrival_tick mechanism.
 - **Jump param**: Agents use `system_id` (proxy remaps to `target_system`). Do NOT tell agents to use `target_system` — Zod validation rejects it before remap runs.
 - **Nav timing logs**: travel_to, jump_route, and passthrough jump/travel all log elapsed ms per step. Check proxy logs to diagnose cache lag vs actual nav delays.
@@ -106,13 +110,15 @@
 - **Real-time tool call logging** (#89 DONE): Direct SQLite writes + in-memory ring buffer (200). SSE stream at `/api/tool-calls/stream` uses subscriber pattern (push, not polling). 7-day retention, 6h auto-prune.
 
 ## OAuth
-- Token at `~/.claude/.credentials.json`, synced to LXC via `spacemolt-fleet sync`
+- **Claude Code v2.1.52+**: `~/.claude/.credentials.json` no longer exists. Use `claude setup-token` for long-lived API keys. Token written directly to LXC credentials file.
+- Old: Token at `~/.claude/.credentials.json`, synced to LXC via `spacemolt-fleet sync` (broken in v2.1.52+)
 - All 5 agents share one OAuth token. `ensure_fresh_token()` checks expiry before fleet start.
 - **OAuth mid-run refresh**: `spacemolt-fleet improve` health loop checks token expiry every 5 min, refreshes if ≤30 min remaining. Prevents agents losing turns to expired tokens.
 - SOCKS proxies (1081/1082) only route game WebSocket, NOT Claude API calls
 
 ## Game Version Notes
-- Current: v0.133.0. Key changes through v0.133 handled in proxy/prompts.
+- Current: v0.140.0+. Key changes through v0.140 handled in proxy/prompts.
+- v0.140.0: Removed `state_update`, `poi_arrival`, `poi_departure` WebSocket push messages. Proxy adapted with active `get_status` polling (#106). v0.137.1 rate-limits MCP spec to 1 req/min/IP — schema caching added (#107).
 - v0.125: Budget ships (Datum, Foundation), commission_status has required_materials. Summarizer added.
 - v0.126: Crafting expansion (new recipes, Nova Terra ion hub), craft param is `count` (not `quantity`).
 - v0.130: Finite resource deposits (regenerate over time), storage cap 100k/item/station, rare ore in dozens of systems, one-time delivery missions.
