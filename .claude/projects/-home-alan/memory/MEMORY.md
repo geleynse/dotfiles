@@ -79,6 +79,13 @@
 - **Fleet agents**: 5 agents on Proxmox LXC 200, all Claude backends. Config at `~/claude/spacemolt/fleet-agents/`
 - **Fleet tests**: `make test` from `~/claude/spacemolt/`
 
+## 3D Printing (CR-10 V3)
+
+- **PLA settings**: Nozzle 200°C, Bed 65°C, First layer speed 15 mm/s (avoid discoloration)
+- **Pre-print checklist**: Clean nozzle before each print to avoid material discoloration
+- **Filament profiles**: `/home/alan/projects/cad/3d/orca-cli/` — `filament-pla.json`, `filament-petg.json`
+- **Process configs**: `process-with-supports.json` (grid supports, auto-detect) — use `--load-settings` with semicolon separation
+
 ## Documentation Locations
 
 - Daily journal: `daily.journal.YYYY.MM.DD.md`
