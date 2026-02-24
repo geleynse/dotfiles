@@ -27,7 +27,8 @@
 - 5 agents on LXC 200 (Proxmox), prompts at `/home/spacemolt/fleet-agents/`
 - Always check `fleet-agents/fleet-config.json` for latest — models/proxies change frequently
 - **Unified server**: `spacemolt-server/` — single Express process on :3100 (merged proxy + web, #12 DONE 2026-02-24)
-- Old `action-proxy/` and `fleet-web/` kept as reference but no longer deployed
+- Old `action-proxy/` deleted from repo (2026-02-23). `fleet-web/` also gone — all code lives in `spacemolt-server/`.
+- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). 511 tests total (433 server + 78 CLI).
 - Deploy: `spacemolt-fleet server deploy` (or `deploy-all`). Old `web deploy`/`proxy deploy` show deprecation warnings.
 - Snapshots at `fleet-snapshots/` (gitignored): `.json` (~288KB) + `-summary.txt` (~1.5KB)
 - `agentDeniedTools` + `callLimits` in fleet-config.json, enforced by proxy `checkGuardrails()`
@@ -67,7 +68,8 @@
 - **battleCache**: DONE (#56). `Map<string, BattleState | null>` in SharedState. Populated from combat_update events and scan_and_attack loop. Cleared after battle ends.
 - **Respawn detection**: DONE (#56). `player_died` sets pendingDeathEnrichment flag; next state_update injects synthetic `respawn_state` critical event with post-respawn location/hull/credits.
 - **Schema drift fixes**: DONE (#54). 9 tools fixed. Drift down to 2 (get_system/get_poi with intentional optional extras).
-- **Most agents on Sonnet** (iteration 8+). Was: drifter/rust/lumen on Haiku, sable/cinder on Sonnet. Cinder-wake now on Codex (experimental, 2026-02-23). Codex does NOT support YAML tool results — cinder has no `toolResultFormat` in config. If Codex underperforms, switch back to Sonnet with `toolResultFormat: "yaml"`.
+- **All agents on Sonnet** except cinder-wake on **Codex** (gpt-5.3-codex, re-enabled 2026-02-24). Codex does NOT support YAML tool results (rmcp can't parse YAML as JSON-RPC) — cinder has no `toolResultFormat` in config. ~68K tokens/turn, ~87K for longer sessions. If Codex underperforms, switch back to Sonnet with `toolResultFormat: "yaml"`.
+- **deploy-all now deploys loop scripts** (fixed 2026-02-24). Previously only `fleet start` and `improve` called `deployLoopScripts()`. Stale loop scripts on LXC caused Codex smoke test failure.
 - All state-changing tools get `waitForTick()`. Nav tools: arrival_tick-aware cache wait (up to 8 ticks for jump, 1 for travel). Auto-undock before jump.
 - **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `state_update` shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
 - **test-nav.ts**: Diagnostic script connecting directly to game WebSocket to test jump protocol. Used to discover the arrival_tick mechanism.
@@ -83,9 +85,10 @@
 - LXC 200 via `ssh root@192.168.1.2` then `pct exec 200`
 - Build locally, deploy compiled JS: `spacemolt-fleet server deploy`
 - **`spacemolt-fleet deploy-all`**: server deploy + sync prompts + server restart. Self-rebuilds fleet-cli first (non-fatal).
-- **deploy-all gotcha**: If you add a new CLI command, the *current* process still runs stale code — the self-rebuild only helps the *next* run. After adding commands, do `npm run build` in fleet-cli/ manually or run deploy-all twice.
-- **Stale process gotcha**: `server stop` now kills legacy `action-proxy` tmux session + `pkill -f 'node dist/index.js'`. Before this fix (2026-02-23), stale processes could hold port 3100, causing new deploys to serve 404 on all routes while health endpoint still worked (MCP router on old process).
-- **Debugging deploy 404s**: If all routes return 404 but `/health` works, check `ps aux | grep "node dist"` for multiple node processes. Kill all and restart.
+- **deploy-all gotcha**: If you add a new CLI command, the *current* process still runs stale code — the self-rebuild only helps the *next* run. After adding commands, do `bun run build` in fleet-cli/ manually or run deploy-all twice.
+- **Bun on LXC 200**: Required for deploy after #96 migration. Deploy pipeline uses `bun install --production` and `bun dist/index.js`. Install Bun on LXC before first post-migration deploy.
+- **Stale process gotcha**: `server stop` now kills legacy `action-proxy` tmux session + `pkill -f 'bun dist/index.js'`. Before this fix (2026-02-23), stale processes could hold port 3100, causing new deploys to serve 404 on all routes while health endpoint still worked (MCP router on old process).
+- **Debugging deploy 404s**: If all routes return 404 but `/health` works, check `ps aux | grep "bun dist"` for multiple bun processes. Kill all and restart.
 - Sync prompts only: `spacemolt-fleet sync` (no restart needed)
 - Server restart needed after fleet-config.json routing/tool changes
 
@@ -153,7 +156,7 @@
 - Stack: React 19 + Next.js 15 (static export) + Tailwind CSS 4 + SMUI theme (Nord palette)
 - Galaxy map: react-force-graph-2d, 505 systems, 5 faction colors (solarian/crimson/nebula/outerrim/voidborn)
 - Next.js `output: 'export'` to `dist/public/`, served by Express static
-- Build: `npm run build` = `build:server` (esbuild) + `build:client` (next build)
+- Build: `bun run build` = `build:server` (esbuild) + `build:client` (next build)
 - Separate tsconfigs: `tsconfig.json` (server/esbuild), `tsconfig.next.json` (React/Next.js)
 - `deploy-all` now self-rebuilds fleet-cli at start (non-fatal)
 
@@ -168,6 +171,14 @@
 - **SSE event consistency**: Tool call SSE must send arrays (wrap single records in `[record]`). Backfill must use same event name as live events (`tool_call`, not `backfill`). Frontend guards with `Array.isArray()`.
 - **Comms timeline delivery enrichment**: `getCommsLog()` uses LEFT JOIN to `fleet_orders` to replace "Order #N delivered" with actual order message content.
 - **Hook types must match server types**: `use-fleet-status.ts` defines its own interfaces — these MUST mirror `shared/types.ts` exactly. Key fields: `state` (not `status`), `healthScore` (not `health`), `actionProxy.healthy` (not `proxyHealthy`), `source` (not `note_type`). When adding API fields, update both the server type AND the hook type.
+
+## Bun Testing Gotchas
+- **`mock.module()` is process-global**: Unlike vitest/jest, Bun's `mock.module()` replaces modules in a shared process-wide cache. Mocking `database.js` in one test file poisons ALL other test files in the same run. Never use `mock.module()` for commonly-imported modules — use real `createDatabase(':memory:')` instead.
+- **`mock.module()` doesn't work for Node built-ins**: `mock.module('node:child_process')` fails silently — the real module is still used. Use `spyOn` on namespace imports instead.
+- **`spyOn` requires namespace imports**: `spyOn(module, 'fn')` only works if the source uses `import * as mod` (namespace import). Named imports (`import { fn }`) capture a direct reference that spyOn can't intercept.
+- **`promisify` custom symbol**: Node's `promisify(execFile)` uses a custom symbol to return `{ stdout, stderr }`. Mock/spy functions don't have this symbol, so `promisify(spy)` returns only the first callback arg. Fix: use manual Promise wrapper.
+- **`global.fetch` not restored by `mock.restore()`**: Direct assignment to `global.fetch` must be manually saved/restored in beforeAll/afterEach.
+- **`bun:sqlite` `db.exec()` supports multi-statement SQL** — works fine for schema creation.
 
 ## Reference Files
 - `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
