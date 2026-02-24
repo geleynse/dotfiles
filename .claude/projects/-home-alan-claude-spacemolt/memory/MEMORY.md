@@ -26,7 +26,9 @@
 ## Fleet Architecture
 - 5 agents on LXC 200 (Proxmox), prompts at `/home/spacemolt/fleet-agents/`
 - Always check `fleet-agents/fleet-config.json` for latest — models/proxies change frequently
-- Action proxy :3100, fleet-web :3000 on LXC
+- **Unified server**: `spacemolt-server/` — single Express process on :3100 (merged proxy + web, #12 DONE 2026-02-24)
+- Old `action-proxy/` and `fleet-web/` kept as reference but no longer deployed
+- Deploy: `spacemolt-fleet server deploy` (or `deploy-all`). Old `web deploy`/`proxy deploy` show deprecation warnings.
 - Snapshots at `fleet-snapshots/` (gitignored): `.json` (~288KB) + `-summary.txt` (~1.5KB)
 - `agentDeniedTools` + `callLimits` in fleet-config.json, enforced by proxy `checkGuardrails()`
 
@@ -79,19 +81,19 @@
 
 ## Deployment
 - LXC 200 via `ssh root@192.168.1.2` then `pct exec 200`
-- Build locally, deploy compiled JS: `spacemolt-fleet web deploy`, `spacemolt-fleet proxy deploy`
-- **`spacemolt-fleet deploy-all`**: web deploy + proxy deploy + sync + restart all. Self-rebuilds fleet-cli first (non-fatal) so next invocation picks up new commands.
+- Build locally, deploy compiled JS: `spacemolt-fleet server deploy`
+- **`spacemolt-fleet deploy-all`**: server deploy + sync prompts + server restart. Self-rebuilds fleet-cli first (non-fatal).
 - **deploy-all gotcha**: If you add a new CLI command, the *current* process still runs stale code — the self-rebuild only helps the *next* run. After adding commands, do `npm run build` in fleet-cli/ manually or run deploy-all twice.
 - Sync prompts only: `spacemolt-fleet sync` (no restart needed)
-- Proxy restart needed after fleet-config.json routing/tool changes
+- Server restart needed after fleet-config.json routing/tool changes
 
 ## SQLite & Agent Docs
 - Tables: agent_diary, agent_docs, agent_signals, proxy_sessions, proxy_game_state, proxy_battle_state, proxy_call_trackers, proxy_tool_calls
 - Docs injected at turn start: strategy (full), discoveries/market-intel (last 20 lines)
 - MCP tools: write_diary, read_diary, write_doc, read_doc, write_report, search_memory
 - **search_memory**: Supports own, cross-agent, and fleet-wide search (#82 DONE). Optional `agent` param (v1) / `id` param (v2). Fleet-web `GET /api/notes/fleet/search` endpoint.
-- **Proxy cache persistence** (#81): statusCache/battleCache/callTrackers persisted to fleet-web SQLite via fire-and-forget HTTP. statusCache throttled to 30s per agent. Restored on proxy startup. battleCache also persisted during scan_and_attack loop.
-- **Real-time tool call logging** (#89 DONE): Proxy fire-and-forget POSTs to fleet-web `/api/tool-calls`. SQLite `proxy_tool_calls` table + in-memory ring buffer (200). SSE stream at `/api/tool-calls/stream`. UI: "Live Activity" section on agent detail, "Tool Calls" tab on logs view. 7-day retention, 6h auto-prune. `tool-call-logger.ts` follows `cache-persistence.ts` pattern.
+- **Proxy cache persistence** (#81): statusCache/battleCache/callTrackers persisted directly to SQLite (was HTTP, now direct after merge #12). statusCache throttled to 30s per agent. Restored on proxy startup.
+- **Real-time tool call logging** (#89 DONE): Direct SQLite writes + in-memory ring buffer (200). SSE stream at `/api/tool-calls/stream` uses subscriber pattern (push, not polling). 7-day retention, 6h auto-prune.
 
 ## OAuth
 - Token at `~/.claude/.credentials.json`, synced to LXC via `spacemolt-fleet sync`
@@ -122,11 +124,11 @@
 - `V2_TO_V1_PARAM_MAP` in schema.ts maps generic `id`/`text`/`count` to v1-specific params per action
 - `spacemolt_catalog` uses `type` (not `action`) as dispatch key — v1 command is always "catalog" with type param
 - **Fixed (2026-02-22)**: v2 `jump_route` had before-system captured after jump, v2 passthrough had redundant tick wait before nav cache wait. Both now match v1 behavior.
-- **Proxy caches persisted** (#81 DONE): statusCache, battleCache, callTrackers saved to fleet-web SQLite via `cache-persistence.ts`. eventBuffers still in-memory only (ephemeral by design).
+- **Proxy caches persisted** (#81 DONE): statusCache, battleCache, callTrackers saved directly to SQLite via `cache-persistence.ts` (direct after merge #12). eventBuffers still in-memory only (ephemeral by design).
 - **Known issue**: `get_system`/`get_poi`/`get_map` param remaps may be wrong — verify against live server
 
 ## Fleet CLI Rewrite (#11)
-- New TypeScript CLI at `fleet-cli/` (npm package name: `spacemolt-fleet`), workspace sibling to action-proxy/fleet-web
+- New TypeScript CLI at `fleet-cli/` (npm package name: `spacemolt-fleet`), workspace sibling to spacemolt-server
 - Root `package.json` with npm workspaces, `tsconfig.base.json` shared config
 - All 31 subcommands ported. Old bash script removed from repo root (was causing worktree config issues).
 - JSONL parser (183 lines) + summary generator (429 lines) — faithful port with 3 bug fixes over Python original
@@ -150,8 +152,9 @@
 - Galaxy map: react-force-graph-2d, 505 systems, system drill-down with POIs
 - Charts: recharts (replaces Chart.js)
 - Model assignments: Opus (2 tasks: init + galaxy map), Sonnet (8 tasks), Haiku (8 tasks). ~755k tokens total.
-- Hono backend stays unchanged. Next.js `output: 'export'` to `out/`, served by Hono.
+- Express backend (post-merge #12). Next.js `output: 'export'` to `out/`, served by Express static.
 - `deploy-all` now self-rebuilds fleet-cli at start (non-fatal). Fixes stale dist/ bootstrapping issue.
 
 ## Reference Files
-- `action-proxy/CLAUDE.md`, `fleet-agents/CLAUDE.md`, `fleet-web/CLAUDE.md` — keep updated on arch changes
+- `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
+- `action-proxy/CLAUDE.md`, `fleet-web/CLAUDE.md` — archived (old two-service setup)
