@@ -1,9 +1,8 @@
 # SpaceMolt Project Memory
 
 ## Project TODO
-- **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#110), strikethrough + **DONE** when completed
-- Quick wins sprint DONE (2026-02-23): #88 deploy-all, #89 tool call logging, #90 jump_route pathfinding, #92 cargo size, #93 facility exposure, #94 search_changelog, #95 supply_commission
+- **`TODO.md`** at repo root — active items only (~11 remaining). **`TODO-ARCHIVE.md`** has ~95 completed items.
+- Numbered items (#1-#115), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
 ## Claude Code Custom Commands & Skills
@@ -13,7 +12,7 @@
 - **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Creates a worktree for isolation, runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. At end, presents merge/PR/discard/keep options. Single skill at `.claude/commands/fleet-manage.md`.
 - **Worktree gotcha**: If other agents clean up worktrees mid-session, fleet-manage's worktree can disappear. The prompt changes will still be synced to LXC but the git branch/commits are lost. Consider committing to main directly for fleet-manage sessions, or protect the worktree.
 - **Old bash script conflict**: The repo root `spacemolt-fleet` was the old 126k bash script. It shadowed the TS CLI (`npx spacemolt-fleet`) and didn't support worktrees — reading config from its own directory, not `git rev-parse --show-toplevel`. Deleted in iteration 8. If a similar issue recurs, check `which spacemolt-fleet` and `file $(which spacemolt-fleet)`.
-- **CLI invocation gotcha**: `npx spacemolt-fleet` may fail with `command not found` in worktrees or after builds. Use `node fleet-cli/dist/cli.js` as fallback. The worktree may need `npm install` before npx works.
+- **CLI invocation**: Fleet CLI is built with `--target bun`. Run with `bun fleet-cli/dist/cli.js <command>`. Do NOT use `node` (fails with `__require is not a function`). `npx spacemolt-fleet` may also fail — `bun fleet-cli/dist/cli.js` is the reliable invocation.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
 - **Improve turn counting**: Uses `/tmp/improve-start-marker` on LXC + `find -newer`. If marker fails, caps at expected turns from duration (duration/interval + 2). Fixed 2026-02-22 — old code had `head -20` fallback that counted historical turns. **Per-agent counts** now passed to analyze (was passing maxTurns for all agents, inflating data for agents with fewer turns like drifter-gale).
 
@@ -44,14 +43,15 @@
 - **Sonnet throughput vs Haiku**: Haiku=~100 turns/10min, Sonnet=~13 turns/30min (~10x slower). Sonnet costs less per run ($8 vs $16) but earns less credits. User chose Sonnet for quality.
 - **Sonnet zero economic activity**: PARTIALLY FIXED (2026-02-24). Summary generator was reporting MINE=0/SELL=0 due to v2 tool counting bug (checked tool.name not input.action). Real data: agents ARE mining/selling but earning little due to zero-demand sells and mining at wrong POIs.
 - **Summary generator v2 fix**: `getEffectiveToolName()` in summary-generator.ts extracts action from input field for v2 consolidated tools. Without this, MINE/SELL/CRAFT/MISSION columns all show 0.
-- **Sable weapon saga (partially fixed)**: #100 buy hint + #101 commission_status fix deployed. Sable now knows items go to storage and gets guidance on withdraw+install. Still needs live verification that sable completes the full buy→withdraw→install_mod→scan_and_attack chain.
+- **NPC buy() doesn't work**: buy() only fills PLAYER sell orders. NPC market items (is_npc:true in get_poi) are reference prices, NOT purchasable. create_buy_order is NOT auto-filled by NPC inventory. Sable prompt rewritten to use commissions/player ships/buy orders.
+- **~~SOCKS5 relay broken under Bun~~**: FIXED (#114). Root cause: Bun sends `Host: 127.0.0.1:<port>` — game server rejects mismatched Host. Fix: `localSocket.once('data')` rewrites Host header before piping. Sable re-enabled on micro proxy (1082).
+- **Instability metrics false positives**: game-client.ts was recording ALL game errors (not_docked, item_not_available) and action_pending as server instability. One error in 5 requests = 20% error rate → "unstable" → blocks all non-safe tools for 10 min window. FIXED: only count connection_failed/timeout/5xx. action_pending has its own retry logic.
+- **~~Circuit breaker is global~~**: FIXED (#115). Each GameClient has its own CircuitBreaker. `BreakerRegistry` in circuit-breaker.ts tracks all with `getAggregateStatus()` for health endpoint. `gameServerBreaker` kept as deprecated compat alias.
 - **Snapshot filename sort bug**: Old snapshots use YYYYMMDD format, new use YYYY-MM-DD. Alphabetical sort picks old files as "latest". Fixed with mtime sort in improve.ts.
 - **~~travel_to wrong POI resolution~~**: FIXED (2026-02-24). `poi-resolver.ts` caches POI data from get_system responses. All 4 travel paths (v1/v2 travel_to + passthrough) resolve names to IDs. get_system summarizer now includes POI `id` field.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
-- **Navigation loops**: Resolved — was inflated data from analyzing old turns. Per-agent turn counting fix deployed. Not a real issue.
-- **25% empty sessions**: Server downtime ate 25/100 turns in iteration 7. lumen-shoal worst (8/20 empty).
-- **Captain's log compliance poor**: 9-13 of 20 sessions missing captains_log_add per agent. May need proxy enforcement.
-- **Forbidden word "sync" false positive**: rust-vane hits "sync" 34x because a system is literally named "sync". Consider exempting system names from forbidden word counting.
+- **Captain's log compliance poor**: May need proxy enforcement.
+- **Forbidden word "sync" false positive**: system literally named "sync". Consider exempting system names.
 - When all agents share the same bug, check common-rules.txt first.
 
 ## YAML Tool Results (TODO #79)
@@ -81,7 +81,8 @@
 - **deploy-all now deploys loop scripts** (fixed 2026-02-24). Previously only `fleet start` and `improve` called `deployLoopScripts()`. Stale loop scripts on LXC caused Codex smoke test failure.
 - All state-changing tools get `waitForTick()`. Nav tools: arrival_tick-aware cache wait (up to 8 ticks for jump, 1 for travel). Auto-undock before jump.
 - **Jump arrival_tick protocol**: Game server sends `{pending:true}` immediately, then deferred `ok` with `{arrival_tick: N}` ~3 ticks later. `refreshStatus()` poll shows new position at tick N. GameClient captures `lastArrivalTick`; `waitForNavCacheUpdate` waits until cache tick >= arrival_tick. Both passthrough jump and jump_route clear `lastArrivalTick` before each jump.
-- **Bun + npm `ws` incompatibility**: Bundled npm `ws` causes "Unexpected server response: 101" under Bun (101 = successful upgrade). Fix: mark `ws` as external in esbuild so Bun uses its built-in ws polyfill. Full Bun native WS migration deferred to #110.
+- **Bun + npm `ws` incompatibility**: Bundled npm `ws` causes "Expected 101 status code" under Bun. Fix: mark `ws` and `socks` as external in esbuild. SOCKS relay still broken (see Active Issues).
+- **Legacy node→bun in deploy scripts**: cmdProxyStart and fleet-web start commands used `node dist/index.js`. Fixed 2026-02-24 to use `bun`. improve.ts now calls cmdServerStart (uses `spacemolt-server` tmux session) instead of cmdProxyStart (`action-proxy` session).
 - **test-nav.ts**: Diagnostic script connecting directly to game WebSocket to test jump protocol. Used to discover the arrival_tick mechanism.
 - **Jump param**: Agents use `system_id` (proxy remaps to `target_system`). Do NOT tell agents to use `target_system` — Zod validation rejects it before remap runs.
 - **Nav timing logs**: travel_to, jump_route, and passthrough jump/travel all log elapsed ms per step. Check proxy logs to diagnose cache lag vs actual nav delays.
@@ -118,7 +119,9 @@
 - SOCKS proxies (1081/1082) only route game WebSocket, NOT Claude API calls
 
 ## Game Version Notes
-- Current: v0.140.0+. Key changes through v0.140 handled in proxy/prompts.
+- Current: v0.144.0. Key changes through v0.140 handled in proxy/prompts.
+- v0.142.5-v0.144.0 (2026-02-24): 5 stability patches in one day. action_pending stuck state affected all agents. v0.144.0 "Server stability instrumentation" — partially cleared stuck state but it returned.
+- v0.143.0: "Economic management tools" — details unknown.
 - v0.140.0: Removed `state_update`, `poi_arrival`, `poi_departure` WebSocket push messages. Proxy adapted with active `get_status` polling (#106). v0.137.1 rate-limits MCP spec to 1 req/min/IP — schema caching added (#107).
 - v0.125: Budget ships (Datum, Foundation), commission_status has required_materials. Summarizer added.
 - v0.126: Crafting expansion (new recipes, Nova Terra ion hub), craft param is `count` (not `quantity`).
@@ -155,12 +158,7 @@
 - **Worktree support**: `config.ts` uses `git rev-parse --show-toplevel` via `execFileSync` for all paths except SNAPSHOTS_DIR (always main repo). `spacemolt-fleet sync/deploy` from a worktree uses that worktree's files automatically.
 
 ## Competitor Clients
-- Client comparison at `~/Dendron/vault.personal/projects.spacemolt.client-comparison.md` — 10 clients analyzed
-- **admiral** (official, NEW 2026-02-22): Official web-based agent manager. Next.js + SQLite + Docker. 12+ LLM providers, triple protocol (HTTP/WS/MCP), DevTools activity log, 150+ cmd autocomplete, directive system, onboarding wizard, MCP v2 support. Likely successor to commander.
-- **botrunner** (humbrol2): Hybrid scripted bots + LLM. Now 12 deterministic routines (added faction_trader, cleanup). Coordinator meta-bot uses public market API. Local pathfinding. Market cache reservation prevents bot self-competition. Very active (30+ commits/day).
-- **SpaceMolt_User** (leopoko, v1.3.3): Full web GUI. PvP battle zones, player trading, facilities, action loops. Weapon reload UI added Feb 23.
-- **sm-cli** (vcarl, 137 commits): Most active CLI. Battle, facility (14 subcmds), catalog with recipe trace, hierarchical commands.
-- **commander** (official, v0.2.11): YAML-over-JSON for token savings. Dynamic OpenAPI schema. Single "game" meta-tool. No changes since Feb 21 — may be superseded by admiral.
+- Full comparison at `~/Dendron/vault.personal/projects.spacemolt.client-comparison.md`
 
 ## Fleet-Web Visual Overhaul (DONE 2026-02-23)
 - Design: `docs/plans/2026-02-23-fleet-web-overhaul-design.md`
@@ -202,4 +200,3 @@
 
 ## Reference Files
 - `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
-- `action-proxy/CLAUDE.md`, `fleet-web/CLAUDE.md` — archived (old two-service setup)
