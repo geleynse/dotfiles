@@ -39,7 +39,11 @@
 - **Sell auto-listing (zero credits)**: FIXED (#69). Proxy gates multi_sell on prior analyze_market call via calledTools tracking in AgentCallTracker. Still happening at prompt level — sable-thorn had 3 zero-demand sells in iteration 7.
 - **Verbosity**: SOLVED by Sonnet. Verbosity rules scaled back (2026-02-23): removed "OUTPUT RULES" + iteration stats from all agent prompts, simplified Rule 14 in common-rules, fleet-manage skill no longer flags verbosity. Forbidden words kept (hallucination indicators only).
 - **Sonnet throughput vs Haiku**: Haiku=~100 turns/10min, Sonnet=~13 turns/30min (~10x slower). Sonnet costs less per run ($8 vs $16) but earns less credits. User chose Sonnet for quality.
-- **Sonnet zero economic activity**: Sonnet agents explore but don't mine/sell. Prompts updated to enforce economic cycle — needs further testing.
+- **Sonnet zero economic activity**: PARTIALLY FIXED (2026-02-24). Summary generator was reporting MINE=0/SELL=0 due to v2 tool counting bug (checked tool.name not input.action). Real data: agents ARE mining/selling but earning little due to zero-demand sells and mining at wrong POIs.
+- **Summary generator v2 fix**: `getEffectiveToolName()` in summary-generator.ts extracts action from input field for v2 consolidated tools. Without this, MINE/SELL/CRAFT/MISSION columns all show 0.
+- **Sable weapon saga**: Sable bought weapons (buy) but they go to station storage silently. Never called install_mod. Commissioned crimson_levy but commission_status returns `{}`. Diary hallucinated "autocannon equipped" when only mining_laser installed. Drifter bought 2x weapon_cannon_1 but deposit() returns "completed" without moving items. send_gift was never tried despite being the right tool.
+- **Snapshot filename sort bug**: Old snapshots use YYYYMMDD format, new use YYYY-MM-DD. Alphabetical sort picks old files as "latest". Fixed with mtime sort in improve.ts.
+- **travel_to wrong POI resolution**: `travel_to sol_station` lands at `sys_0041_sun`. Blocks docking/selling. Documented in proxy-todos.md.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
 - **Navigation loops**: Resolved — was inflated data from analyzing old turns. Per-agent turn counting fix deployed. Not a real issue.
 - **25% empty sessions**: Server downtime ate 25/100 turns in iteration 7. lumen-shoal worst (8/20 empty).
@@ -179,6 +183,7 @@
 - **`promisify` custom symbol**: Node's `promisify(execFile)` uses a custom symbol to return `{ stdout, stderr }`. Mock/spy functions don't have this symbol, so `promisify(spy)` returns only the first callback arg. Fix: use manual Promise wrapper.
 - **`global.fetch` not restored by `mock.restore()`**: Direct assignment to `global.fetch` must be manually saved/restored in beforeAll/afterEach.
 - **`bun:sqlite` `db.exec()` supports multi-statement SQL** — works fine for schema creation.
+- **Bun spawn pipe EPIPE**: `tar.stdout.pipe(ssh.stdin)` between two `spawn()` processes causes EPIPE + "Unexpected EOF in archive". Fix: use shell pipe via `exec()` instead (delegates piping to OS). Affected `pveTarSync` in fleet-cli deploy.
 
 ## Reference Files
 - `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
