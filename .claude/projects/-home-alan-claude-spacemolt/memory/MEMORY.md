@@ -2,7 +2,7 @@
 
 ## Project TODO
 - **`TODO.md`** at repo root — master list of ideas, bugs, and feature work
-- Numbered items (#1-#97), strikethrough + **DONE** when completed
+- Numbered items (#1-#103), strikethrough + **DONE** when completed
 - Quick wins sprint DONE (2026-02-23): #88 deploy-all, #89 tool call logging, #90 jump_route pathfinding, #92 cargo size, #93 facility exposure, #94 search_changelog, #95 supply_commission
 - Check TODO.md at session start to see what's pending
 
@@ -13,6 +13,7 @@
 - **`fleet-manage` skill** (was fleet-improve-loop): `/fleet-manage` with `improve N rounds` arg. Creates a worktree for isolation, runs `spacemolt-fleet improve`, dispatches Sonnet subagent analysis, fixes prompts, commits+syncs, loops up to N iterations. At end, presents merge/PR/discard/keep options. Single skill at `.claude/commands/fleet-manage.md`.
 - **Worktree gotcha**: If other agents clean up worktrees mid-session, fleet-manage's worktree can disappear. The prompt changes will still be synced to LXC but the git branch/commits are lost. Consider committing to main directly for fleet-manage sessions, or protect the worktree.
 - **Old bash script conflict**: The repo root `spacemolt-fleet` was the old 126k bash script. It shadowed the TS CLI (`npx spacemolt-fleet`) and didn't support worktrees — reading config from its own directory, not `git rev-parse --show-toplevel`. Deleted in iteration 8. If a similar issue recurs, check `which spacemolt-fleet` and `file $(which spacemolt-fleet)`.
+- **CLI invocation gotcha**: `npx spacemolt-fleet` may fail with `command not found` in worktrees or after builds. Use `node fleet-cli/dist/cli.js` as fallback. The worktree may need `npm install` before npx works.
 - **`spacemolt-fleet improve <canary> [--duration N] [--health-threshold N]`**: Canary start → health monitoring → timed shutdown → analyze → JSON report. Exit: 0=success, 1=canary failed, 2=all stopped early.
 - **Improve turn counting**: Uses `/tmp/improve-start-marker` on LXC + `find -newer`. If marker fails, caps at expected turns from duration (duration/interval + 2). Fixed 2026-02-22 — old code had `head -20` fallback that counted historical turns. **Per-agent counts** now passed to analyze (was passing maxTurns for all agents, inflating data for agents with fewer turns like drifter-gale).
 
@@ -43,7 +44,7 @@
 - **Summary generator v2 fix**: `getEffectiveToolName()` in summary-generator.ts extracts action from input field for v2 consolidated tools. Without this, MINE/SELL/CRAFT/MISSION columns all show 0.
 - **Sable weapon saga**: Sable bought weapons (buy) but they go to station storage silently. Never called install_mod. Commissioned crimson_levy but commission_status returns `{}`. Diary hallucinated "autocannon equipped" when only mining_laser installed. Drifter bought 2x weapon_cannon_1 but deposit() returns "completed" without moving items. send_gift was never tried despite being the right tool.
 - **Snapshot filename sort bug**: Old snapshots use YYYYMMDD format, new use YYYY-MM-DD. Alphabetical sort picks old files as "latest". Fixed with mtime sort in improve.ts.
-- **travel_to wrong POI resolution**: `travel_to sol_station` lands at `sys_0041_sun`. Blocks docking/selling. Documented in proxy-todos.md.
+- **~~travel_to wrong POI resolution~~**: FIXED (2026-02-24). `poi-resolver.ts` caches POI data from get_system responses. All 4 travel paths (v1/v2 travel_to + passthrough) resolve names to IDs. get_system summarizer now includes POI `id` field.
 - **Re-contamination**: Agents rewrite contaminated docs even after wipes. Proxy now rejects contaminated writes to write_doc/write_diary, but watch for new contamination patterns.
 - **Navigation loops**: Resolved — was inflated data from analyzing old turns. Per-agent turn counting fix deployed. Not a real issue.
 - **25% empty sessions**: Server downtime ate 25/100 turns in iteration 7. lumen-shoal worst (8/20 empty).
@@ -163,6 +164,13 @@
 - Build: `bun run build` = `build:server` (esbuild) + `build:client` (next build)
 - Separate tsconfigs: `tsconfig.json` (server/esbuild), `tsconfig.next.json` (React/Next.js)
 - `deploy-all` now self-rebuilds fleet-cli at start (non-fatal)
+
+## Ship Images
+- SVG silhouettes as primary display (`ShipImageFallback.tsx`), 13 category-specific shapes
+- CDN image (`spacemolt.com/images/ships/catalog/{class_id}.webp`) overlays SVG if available
+- Only 5 ships have CDN images: outerrim_prayer, outerrim_loose_change, outerrim_rubble, nebula_floor_price, nebula_motherlode — all others use SVG
+- Deleted overengineered caching layer (shipImageCache.ts, useShipImagePrefetch.ts, ShipImagePlaceholder.tsx) — browser handles caching natively
+- Ship `class_id` from game state maps to `ship.class` in frontend via `game-state.ts` flatten()
 
 ## Fleet-Web UI Gotchas
 - **Diary API fields**: Returns `{ id, entry, created_at }` not `{ timestamp, content }`. diary-viewer.tsx and notes/page.tsx must use correct field names.
