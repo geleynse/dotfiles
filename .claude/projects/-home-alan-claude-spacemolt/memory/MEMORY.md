@@ -65,6 +65,7 @@
 ## Proxy Code Structure Gotchas
 - `createSapServer` (v1) and `createSapServerV2` (v2) are separate function scopes in server.ts. Helper functions defined inside one are NOT accessible from the other. Shared helpers must be at module level (before the exports). This caused a build failure with `throttledPersistGameState`.
 - Both v1 and v2 need identical wiring for persistence, events, guardrails. When adding persistence calls, always grep for the v2 equivalent and add there too.
+- **Game response wrappers**: Many game tools return `{command: "tool_name", ...data}`. Summarizers receive the full response — `Object.keys()` count includes `command`. Check emptiness AFTER `pick()`, not before, when detecting "no data" responses.
 
 ## Proxy Key Gotchas
 - `PARAM_REMAPS` in schema.ts: jump→target_system, travel→target_poi, find_route→target_system, search_systems→query. `OUR_SCHEMA_PARAMS` in server.ts must stay in sync.
