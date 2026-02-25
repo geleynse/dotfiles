@@ -5,6 +5,14 @@
 - Numbered items (#1-#127), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
+## Authentication System (2026-02-25)
+- **Local network auth** (#user-request): IP-based auth for local network access without Cloudflare
+  - `local-network` adapter: Grants admin to IPs in configured ranges (CIDR, wildcards, single IPs)
+  - `layered` adapter: Tries local-network first, then Cloudflare JWT fallback
+  - **Critical fix**: `app.set("trust proxy", true)` enables Express to extract client IP correctly in containerized/proxied environments
+  - Config in `fleet-config.json`: `{"adapter": "layered", "config": {"localNetworkRanges": ["192.168.0.0/16", "127.0.0.1/32"], "cloudflareTeamDomain": "...", "cloudflareAudience": "..."}}`
+  - Access: Local network (192.168.x.x) = instant admin, CF auth = admin, unauthenticated = viewer (read-only)
+
 ## Claude Code Custom Commands & Skills
 - Slash commands: `.claude/commands/` (no YAML frontmatter, filename = command name)
 - Skills: `.claude/skills/` (YAML frontmatter with name/description)
@@ -130,7 +138,7 @@
 - SOCKS proxies (1081/1082) only route game WebSocket, NOT Claude API calls
 
 ## Game Version Notes
-- Current: v0.144.0. Key changes through v0.140 handled in proxy/prompts.
+- Current: v0.144.7. Key changes through v0.140 handled in proxy/prompts.
 - v0.142.5-v0.144.0 (2026-02-24): 5 stability patches in one day. action_pending stuck state affected all agents. v0.144.0 "Server stability instrumentation" — partially cleared stuck state but it returned.
 - v0.143.0: "Economic management tools" — details unknown.
 - v0.140.0: Removed `state_update`, `poi_arrival`, `poi_departure` WebSocket push messages. Proxy adapted with active `get_status` polling (#106). v0.137.1 rate-limits MCP spec to 1 req/min/IP — schema caching added (#107).
