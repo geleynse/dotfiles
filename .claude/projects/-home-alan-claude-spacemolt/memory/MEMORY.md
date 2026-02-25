@@ -28,7 +28,7 @@
 - Always check `fleet-agents/fleet-config.json` for latest — models/proxies change frequently
 - **Unified server**: `spacemolt-server/` — single Express process on :3100 (merged proxy + web, #12 DONE 2026-02-24)
 - Old `action-proxy/` deleted from repo (2026-02-23). `fleet-web/` also gone — all code lives in `spacemolt-server/`.
-- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). ~960 tests total (882 server + 78 CLI).
+- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). ~1143 tests total (1065 server + 78 CLI).
 - Deploy: `spacemolt-fleet server deploy` (or `deploy-all`). Old `web deploy`/`proxy deploy` show deprecation warnings.
 - Snapshots at `fleet-snapshots/` (gitignored): `.json` (~288KB) + `-summary.txt` (~1.5KB)
 - `agentDeniedTools` + `callLimits` in fleet-config.json, enforced by proxy `checkGuardrails()`
@@ -62,15 +62,19 @@
 - **All agents enabled** (iteration 8+, was drifter-gale only for A/B). Proxy logs `[yaml]` with byte savings per response.
 - Responses that bypass `withInjections()` (errors, doc tools) stay JSON — they're tiny.
 
-## Proxy Code Structure (post-Gantry cleanup 2026-02-24)
+## Proxy Code Structure (post-Gantry Phase 3 2026-02-24)
 - **Naming**: SAP → Gantry. Types: `GantryConfig` (alias `SapConfig` deprecated). Factories: `createGantryServer`/`createGantryServerV2`. Log prefix: `[Gantry]`. MCP server name: `"gantry"`.
-- **server.ts reduced from 4,491 → 1,130 lines** via two extraction phases:
+- **server.ts reduced from 4,491 → 317 lines** via three extraction phases:
   - Phase 1: `pipeline.ts` (59 tests), `compound-tools-impl.ts` (53 tests), `auth-handlers.ts` (19 tests)
   - Phase 2: `tool-registry.ts` (23 tests), `doc-tools.ts` (14 tests), `cached-queries.ts` (8 tests), `public-tools.ts` (7 tests), `mcp-factory.ts` (12 tests), `serverSchemaToZod` moved to `schema.ts` (7 tests)
+  - Phase 3: `gantry-v2.ts` (17 tests), `passthrough-handler.ts` (15 tests), `proxy-constants.ts` (shared constants extracted to break circular imports). Shared handler exports added to cached-queries/doc-tools/public-tools/tool-registry.
 - **DI pattern**: Each module defines a `*Deps` interface, `textResult` duplicated locally, pure functions imported directly, shared state via deps.
+- **v1/v2 deduplication**: Handler logic shared between v1 and v2 (~530 lines deduplicated). Each Phase 2 module exports pure handler functions. v1 `registerXxxTools()` and v2 action dispatch both call shared handlers. Only difference: param naming (v1 named, v2 generic id/text/count).
 - **mcp-factory.ts**: Top-level `createMcpServer()` — schema fetch, shared state init, health poller, Express router, v1/v2 endpoints. Re-exported from server.ts for app.ts compat.
-- **tool-registry.ts**: Exports `TOOL_SCHEMAS`, `NO_PARAM_DESCRIPTIONS`, `PROXY_HANDLED_TOOLS`, `registerPassthroughTools()`, `registerCompoundTools()`.
-- v1 `createGantryServer` is now a slim delegator (~100 lines). v2 `createGantryServerV2` (~700 lines) is Phase 3 candidate.
+- **gantry-v2.ts** (~479 lines): `createGantryServerV2` factory, `V2_ACTION_TO_V1_NAME` mapping, `BATTLE_SUB_ACTIONS`, v2→v1 param remapping, dispatches to shared handlers.
+- **passthrough-handler.ts** (~272 lines): `handlePassthrough()` — nav capture, auto-undock, execute, tick wait, error hints, summarize, enrich, buy hint. Used by both v1 and v2.
+- **proxy-constants.ts** (~106 lines): `STATE_CHANGING_TOOLS`, `CONTAMINATION_WORDS`, `stripPendingFields()`, `throttledPersistGameState()`, `reformatResponse()`. Created to break circular import between server.ts ↔ gantry-v2.ts.
+- **tool-registry.ts**: Exports `TOOL_SCHEMAS`, `NO_PARAM_DESCRIPTIONS`, `PROXY_HANDLED_TOOLS`, `registerPassthroughTools()`, `registerCompoundTools()`, `buildCompoundActions()`, `handleGetEvents()`, `handleGetSessionInfo()`.
 - **Config cleaned**: No more hardcoded IPs (PROXY_MAP/DIRECT_HOST removed), no DEFAULT_AGENTS fallback. Zod validation on load. Config file chain: `gantry.$GANTRY_ENV.json` → `gantry.json` → `fleet-config.json`. 23 config tests.
 - **Game response wrappers**: Many game tools return `{command: "tool_name", ...data}`. Summarizers receive the full response — `Object.keys()` count includes `command`. Check emptiness AFTER `pick()`, not before, when detecting "no data" responses.
 
