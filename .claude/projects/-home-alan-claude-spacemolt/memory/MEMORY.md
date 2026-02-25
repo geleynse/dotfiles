@@ -1,8 +1,8 @@
 # SpaceMolt Project Memory
 
 ## Project TODO
-- **`TODO.md`** at repo root — active items only (~11 remaining). **`TODO-ARCHIVE.md`** has ~95 completed items.
-- Numbered items (#1-#115), strikethrough + **DONE** when completed
+- **`TODO.md`** at repo root — active items only (~10 remaining). **`TODO-ARCHIVE.md`** has ~98 completed items.
+- Numbered items (#1-#119), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
 ## Claude Code Custom Commands & Skills
@@ -28,7 +28,7 @@
 - Always check `fleet-agents/fleet-config.json` for latest — models/proxies change frequently
 - **Unified server**: `spacemolt-server/` — single Express process on :3100 (merged proxy + web, #12 DONE 2026-02-24)
 - Old `action-proxy/` deleted from repo (2026-02-23). `fleet-web/` also gone — all code lives in `spacemolt-server/`.
-- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). 511 tests total (433 server + 78 CLI).
+- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). ~945 tests total (867 server + 78 CLI).
 - Deploy: `spacemolt-fleet server deploy` (or `deploy-all`). Old `web deploy`/`proxy deploy` show deprecation warnings.
 - Snapshots at `fleet-snapshots/` (gitignored): `.json` (~288KB) + `-summary.txt` (~1.5KB)
 - `agentDeniedTools` + `callLimits` in fleet-config.json, enforced by proxy `checkGuardrails()`
@@ -62,13 +62,20 @@
 - **All agents enabled** (iteration 8+, was drifter-gale only for A/B). Proxy logs `[yaml]` with byte savings per response.
 - Responses that bypass `withInjections()` (errors, doc tools) stay JSON — they're tiny.
 
-## Proxy Code Structure Gotchas
-- `createSapServer` (v1) and `createSapServerV2` (v2) are separate function scopes in server.ts. Helper functions defined inside one are NOT accessible from the other. Shared helpers must be at module level (before the exports). This caused a build failure with `throttledPersistGameState`.
-- Both v1 and v2 need identical wiring for persistence, events, guardrails. When adding persistence calls, always grep for the v2 equivalent and add there too.
+## Proxy Code Structure (post-Gantry cleanup 2026-02-24)
+- **Naming**: SAP → Gantry. Types: `GantryConfig` (alias `SapConfig` deprecated). Factories: `createGantryServer`/`createGantryServerV2`. Log prefix: `[Gantry]`. MCP server name: `"gantry"`.
+- **server.ts reduced from 4,491 → 2,635 lines (-41%)**. Shared logic extracted to:
+  - `pipeline.ts` — PipelineContext interface, getAgentForSession, getTracker, resetTracker, callSignatureV1/V2, checkGuardrailsV1/V2, withInjections, decontaminateLog (59 tests)
+  - `compound-tools-impl.ts` — batchMine, travelTo, jumpRoute, multiSell, scanAndAttack, battleReadiness, lootWrecks + CompoundToolDeps interface (53 tests)
+  - `auth-handlers.ts` — handleLogin, handleLogout + LoginDeps interface (19 tests)
+- **PipelineContext pattern**: Uses callback functions (getFleetPendingOrders, markOrderDelivered, reformatResponse) to avoid circular imports between server.ts and extracted modules.
+- **CompoundToolDeps pattern**: Explicit dependency injection `{client, agentName, statusCache, config}` instead of closure scope.
+- v1 and v2 factories are now thin wrappers — build PipelineContext + loginDeps, register tools with Zod schemas, delegate to shared modules.
+- **Config cleaned**: No more hardcoded IPs (PROXY_MAP/DIRECT_HOST removed), no DEFAULT_AGENTS fallback. Zod validation on load. Config file chain: `gantry.$GANTRY_ENV.json` → `gantry.json` → `fleet-config.json`. 23 config tests.
 - **Game response wrappers**: Many game tools return `{command: "tool_name", ...data}`. Summarizers receive the full response — `Object.keys()` count includes `command`. Check emptiness AFTER `pick()`, not before, when detecting "no data" responses.
 
 ## Proxy Key Gotchas
-- `PARAM_REMAPS` in schema.ts: jump→target_system, travel→target_poi, find_route→target_system, search_systems→query. `OUR_SCHEMA_PARAMS` in server.ts must stay in sync.
+- `PARAM_REMAPS` in schema.ts: jump→target_system, travel→target_poi, find_route→target_system, search_systems→query.
 - `checkSchemaDrift()` runs at startup — compares our params vs server, logs mismatches.
 - get_status is cached (populated by `refreshStatus()` polling after each tool call, NOT WebSocket push). Structure: `{tick, player: {credits, current_system, ...}, ship: {fuel, hull, cargo, ...}}`
 - **Schema caching** (#107 DONE): `data/schema-cache.json` caches v1+v2 schemas. `invalidateSchemaCache()` on game version change. Tests must call `invalidateSchemaCache()` in setup/teardown to prevent cross-test pollution.
@@ -198,5 +205,14 @@
 - **`bun:sqlite` `db.exec()` supports multi-statement SQL** — works fine for schema creation.
 - **Bun spawn pipe EPIPE**: `tar.stdout.pipe(ssh.stdin)` between two `spawn()` processes causes EPIPE + "Unexpected EOF in archive". Fix: use shell pipe via `exec()` instead (delegates piping to OS). Affected `pveTarSync` in fleet-cli deploy.
 
-## Reference Files
-- `spacemolt-server/CLAUDE.md`, `fleet-agents/CLAUDE.md` — keep updated on arch changes
+## External Access & Auth (#116 DONE 2026-02-25)
+- **Public**: `gantry.ra726.net` (viewer, read-only). **Admin**: `sm.ra726.net` (CF Access, full control).
+- Both hostnames on existing HA CF tunnel, pointing to LXC 200 (`192.168.1.105:3100`).
+- Auth config in `fleet-config.json` under `"auth"` key. Three built-in adapters: `none`/`token`/`cloudflare-access`.
+- `src/web/auth/` — types, middleware, 3 adapters, factory. 39 tests in `auth.test.ts`.
+- **Gotcha**: `/api/auth/me` must be auth-optional (not public) — it needs to run `adapter.authenticate()` to populate `req.auth`, but never block access. Initially was in PUBLIC_ROUTES which skipped auth entirely → always returned viewer.
+- **Route classification**: GET=viewer, POST/PUT/DELETE+MCP=admin. MCP localhost bypass (`127.0.0.1`/`::1`/`::ffff:127.0.0.1`).
+- **Frontend**: `AuthProvider` wraps app in layout.tsx. `useAuth()` hook returns `{role, identity, isAdmin}`. Admin controls gated: comms SendOrderForm, notes edit button, agent start/stop/restart/inject/shutdown, fleet Start All/Stop All.
+- **HealthBar `invert` prop**: Cargo bars use `invert` for green=empty, red=full.
+- **CF Access team domain**: `ra726.cloudflareaccess.com`. AUD tag in fleet-config.json.
+- **cloudflared installed on LXC 200** (2026-02-25) but not used — tunnel runs through HA.
