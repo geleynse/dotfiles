@@ -1,8 +1,8 @@
 # SpaceMolt Project Memory
 
 ## Project TODO
-- **`TODO.md`** at repo root — active items only (~10 remaining). **`TODO-ARCHIVE.md`** has ~98 completed items.
-- Numbered items (#1-#119), strikethrough + **DONE** when completed
+- **`TODO.md`** at repo root — active items only (~10 remaining). **`TODO-ARCHIVE.md`** has ~102 completed items.
+- Numbered items (#1-#127), strikethrough + **DONE** when completed
 - Check TODO.md at session start to see what's pending
 
 ## Claude Code Custom Commands & Skills
@@ -28,7 +28,7 @@
 - Always check `fleet-agents/fleet-config.json` for latest — models/proxies change frequently
 - **Unified server**: `spacemolt-server/` — single Express process on :3100 (merged proxy + web, #12 DONE 2026-02-24)
 - Old `action-proxy/` deleted from repo (2026-02-23). `fleet-web/` also gone — all code lives in `spacemolt-server/`.
-- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). ~945 tests total (867 server + 78 CLI).
+- **Runtime: Bun** (#96 DONE 2026-02-23). Both fleet-cli and spacemolt-server use Bun for runtime, test runner, and bundling. SQLite via `bun:sqlite` (replaced better-sqlite3). Tests via `bun:test` (replaced vitest). ~960 tests total (882 server + 78 CLI).
 - Deploy: `spacemolt-fleet server deploy` (or `deploy-all`). Old `web deploy`/`proxy deploy` show deprecation warnings.
 - Snapshots at `fleet-snapshots/` (gitignored): `.json` (~288KB) + `-summary.txt` (~1.5KB)
 - `agentDeniedTools` + `callLimits` in fleet-config.json, enforced by proxy `checkGuardrails()`
@@ -64,13 +64,13 @@
 
 ## Proxy Code Structure (post-Gantry cleanup 2026-02-24)
 - **Naming**: SAP → Gantry. Types: `GantryConfig` (alias `SapConfig` deprecated). Factories: `createGantryServer`/`createGantryServerV2`. Log prefix: `[Gantry]`. MCP server name: `"gantry"`.
-- **server.ts reduced from 4,491 → 2,635 lines (-41%)**. Shared logic extracted to:
-  - `pipeline.ts` — PipelineContext interface, getAgentForSession, getTracker, resetTracker, callSignatureV1/V2, checkGuardrailsV1/V2, withInjections, decontaminateLog (59 tests)
-  - `compound-tools-impl.ts` — batchMine, travelTo, jumpRoute, multiSell, scanAndAttack, battleReadiness, lootWrecks + CompoundToolDeps interface (53 tests)
-  - `auth-handlers.ts` — handleLogin, handleLogout + LoginDeps interface (19 tests)
-- **PipelineContext pattern**: Uses callback functions (getFleetPendingOrders, markOrderDelivered, reformatResponse) to avoid circular imports between server.ts and extracted modules.
-- **CompoundToolDeps pattern**: Explicit dependency injection `{client, agentName, statusCache, config}` instead of closure scope.
-- v1 and v2 factories are now thin wrappers — build PipelineContext + loginDeps, register tools with Zod schemas, delegate to shared modules.
+- **server.ts reduced from 4,491 → 1,130 lines** via two extraction phases:
+  - Phase 1: `pipeline.ts` (59 tests), `compound-tools-impl.ts` (53 tests), `auth-handlers.ts` (19 tests)
+  - Phase 2: `tool-registry.ts` (23 tests), `doc-tools.ts` (14 tests), `cached-queries.ts` (8 tests), `public-tools.ts` (7 tests), `mcp-factory.ts` (12 tests), `serverSchemaToZod` moved to `schema.ts` (7 tests)
+- **DI pattern**: Each module defines a `*Deps` interface, `textResult` duplicated locally, pure functions imported directly, shared state via deps.
+- **mcp-factory.ts**: Top-level `createMcpServer()` — schema fetch, shared state init, health poller, Express router, v1/v2 endpoints. Re-exported from server.ts for app.ts compat.
+- **tool-registry.ts**: Exports `TOOL_SCHEMAS`, `NO_PARAM_DESCRIPTIONS`, `PROXY_HANDLED_TOOLS`, `registerPassthroughTools()`, `registerCompoundTools()`.
+- v1 `createGantryServer` is now a slim delegator (~100 lines). v2 `createGantryServerV2` (~700 lines) is Phase 3 candidate.
 - **Config cleaned**: No more hardcoded IPs (PROXY_MAP/DIRECT_HOST removed), no DEFAULT_AGENTS fallback. Zod validation on load. Config file chain: `gantry.$GANTRY_ENV.json` → `gantry.json` → `fleet-config.json`. 23 config tests.
 - **Game response wrappers**: Many game tools return `{command: "tool_name", ...data}`. Summarizers receive the full response — `Object.keys()` count includes `command`. Check emptiness AFTER `pick()`, not before, when detecting "no data" responses.
 
@@ -186,7 +186,7 @@
 
 ## Fleet-Web UI Gotchas
 - **Diary API fields**: Returns `{ id, entry, created_at }` not `{ timestamp, content }`. diary-viewer.tsx and notes/page.tsx must use correct field names.
-- **DB timestamps lack timezone**: SQLite timestamps like `"2026-02-24 01:19:17"` need `T` + `Z` appended for correct UTC parsing in browser. Without this, `new Date()` interprets ambiguously → "just now" for old entries.
+- **DB timestamps lack timezone**: SQLite timestamps like `"2026-02-24 01:19:17"` need `T` + `Z` appended for correct UTC parsing. FIXED (#120): shared `src/lib/time.ts` with `parseDbTimestamp()` handles this. All frontend timestamp display now uses these shared utils.
 - **Contrast stacking**: Never combine `text-muted-foreground` with `opacity-*` — the compound effect makes text invisible on dark backgrounds. Current `muted-foreground: #b0bbd0` gives ~7:1 on card bg (#242933).
 - **Map hit areas must scale with zoom**: `nodePointerAreaPaint` needs `minScreenPx / globalScale` same as visual dots, otherwise hit area shrinks below dot size when zoomed out.
 - **Game factions**: 5 factions in map data: solarian, crimson, nebula, outerrim, voidborn (+ empty string for neutral). Must all be in EMPIRE_COLORS.
