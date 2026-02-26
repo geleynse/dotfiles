@@ -43,19 +43,19 @@ alias Rainbow='colout "^.*$" Rainbow'
 
 # Claude Code in tmux
 cc() {
-  local name="${1:-claude-$(date +%H%M)}"
+  local name="${1:-claude-$(date +%H%M%S)}"
   shift 2>/dev/null
   tmux new-session -d -s "$name" "claude $*; zsh" && tmux attach -t "$name"
 }
 
 # Claude Code with specific model in tmux
-cch() { cc "haiku-$(date +%H%M)" --model haiku "$@"; }
-ccs() { cc "sonnet-$(date +%H%M)" --model sonnet "$@"; }
-cco() { cc "opus-$(date +%H%M)" --model opus "$@"; }
+cch() { cc "haiku-$(date +%H%M%S)" --model haiku "$@"; }
+ccs() { cc "sonnet-$(date +%H%M%S)" --model sonnet "$@"; }
+cco() { cc "opus-$(date +%H%M%S)" --model opus "$@"; }
 
 # Codex in tmux
 cx() {
-  local name="${1:-codex-$(date +%H%M)}"
+  local name="${1:-codex-$(date +%H%M%S)}"
   shift 2>/dev/null
   tmux new-session -d -s "$name" "codex $*; zsh" && tmux attach -t "$name"
 }

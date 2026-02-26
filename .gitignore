@@ -1,27 +1,57 @@
-.aliases_local
-.arduino15
-.cache
-.config/*
-!.config/server-updates/
-!.config/git/
-!.config/restic/
-# Only track excludes from restic, not credentials
+# Ignore everything by default (whitelist approach)
+*
+
+# Core dotfiles
+!.gitignore
+!.gitconfig
+!.gitmodules
+!.aliases
+!.zshrc
+!.zsh_modules
+!.zsh_modules/**
+!.tmux.conf
+!.vimrc
+!.vim
+!.vim/**
+.vim/.netrwhist
+
+# Never commit _local variants (machine-specific)
+*_local
+
+# SSH config (not keys!)
+!.ssh
+!.ssh/config
+# Explicitly ignore SSH keys and credentials
+.ssh/id_*
+.ssh/*.pub
+.ssh/known_hosts*
+.ssh/authorized_keys
+.ssh/google_*
+
+# Selective .config dirs
+!.config
+!.config/git
+!.config/git/**
+!.config/server-updates
+!.config/server-updates/**
+!.config/restic
+!.config/restic/**
+# Ignore restic credentials
 .config/restic/env
 .config/restic/password
-.espressif
-.factorio
-.java
-.local
-.vscode
-.vscode-oss
-Arduino
-Desktop
-Documents
-Downloads
-Music
-Pictures
-Public
-Templates
-Videos
-code
-esp
+
+# Scripts and utilities
+!bin
+!bin/**
+!scripts
+!scripts/**
+# Ignore compiled/cached files and large binaries
+bin/__pycache__
+scripts/__pycache__
+bin/*.AppImage
+bin/*.appimage
+bin/orca-slicer
+
+# Repo files
+!LICENSE
+!README.md
