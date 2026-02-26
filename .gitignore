@@ -18,22 +18,10 @@
 # Never commit _local variants (machine-specific)
 *_local
 
-# SSH config (not keys!)
-!.ssh
-!.ssh/config
-# Explicitly ignore SSH keys and credentials
-.ssh/id_*
-.ssh/*.pub
-.ssh/known_hosts*
-.ssh/authorized_keys
-.ssh/google_*
-
 # Selective .config dirs
 !.config
 !.config/git
 !.config/git/**
-!.config/server-updates
-!.config/server-updates/**
 !.config/restic
 !.config/restic/**
 # Ignore restic credentials
