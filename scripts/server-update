@@ -61,6 +61,7 @@ usage() {
     echo "    debian   - Debian/Ubuntu server (apt with sudo)"
     echo "    ha       - Home Assistant via Proxmox guest exec"
     echo "    gcp      - Google Cloud instance (gcloud compute ssh)"
+    echo "    immich   - Immich via Docker Compose (docker compose pull + up -d)"
     echo ""
     echo "  Example config entries:"
     echo "    proxmox|proxmox|ssh -n root@192.168.1.2"
@@ -92,7 +93,7 @@ load_servers() {
 }
 
 # Valid server types
-VALID_TYPES="proxmox debian ha gcp"
+VALID_TYPES="proxmox debian ha gcp immich"
 
 validate_type() {
     local type=$1
@@ -294,6 +295,20 @@ check_updates() {
                 echo -e "${GREEN}Up to date${NC}"
             fi
             ;;
+        immich)
+            result=$(run_cmd "$ssh_cmd" "cd ~/immich && docker compose pull 2>&1" "$type")
+            cmd_exit=$?
+            if [[ $cmd_exit -ne 0 ]]; then
+                echo -e "${RED}Failed to check updates $(exit_code_msg $cmd_exit)${NC}"
+                [[ -n "$result" ]] && echo "$result" | head -5
+            elif echo "$result" | grep -qi "Pull complete\|Downloaded newer"; then
+                has_updates=true
+                echo -e "${YELLOW}New images available:${NC}"
+                echo "$result" | grep -i "Pull complete\|Downloaded newer\|Pulling" | head -10
+            else
+                echo -e "${GREEN}Up to date${NC}"
+            fi
+            ;;
     esac
     echo ""
 
@@ -377,6 +392,28 @@ apply_updates() {
                 [[ -n "$result" ]] && echo "$result" | tail -10
             else
                 echo "$result" | tail -5
+            fi
+            ;;
+        immich)
+            echo "Pulling latest images..."
+            result=$(run_cmd "$ssh_cmd" "cd ~/immich && docker compose pull 2>&1" "$type")
+            cmd_exit=$?
+            if [[ $cmd_exit -ne 0 ]]; then
+                had_error=true
+                echo -e "${RED}Pull failed $(exit_code_msg $cmd_exit)${NC}"
+                [[ -n "$result" ]] && echo "$result" | tail -5
+            else
+                echo "$result" | grep -i "Pull complete\|Downloaded\|up-to-date\|Pulling" | head -10
+                echo "Restarting containers..."
+                result=$(run_cmd "$ssh_cmd" "cd ~/immich && docker compose up -d 2>&1" "$type")
+                cmd_exit=$?
+                if [[ $cmd_exit -ne 0 ]]; then
+                    had_error=true
+                    echo -e "${RED}Restart failed $(exit_code_msg $cmd_exit)${NC}"
+                    [[ -n "$result" ]] && echo "$result" | tail -5
+                else
+                    echo "$result" | tail -5
+                fi
             fi
             ;;
     esac
