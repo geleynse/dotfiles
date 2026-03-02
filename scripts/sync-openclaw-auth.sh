@@ -27,7 +27,8 @@ if python3 -c "exit(0 if float('${HOURS_LEFT:-99}') > 2 else 1)" 2>/dev/null; th
     true  # Token is fresh enough
 else
     echo "Token expires in ${HOURS_LEFT}h — triggering refresh via claude API call..."
-    claude -p "." --output-format text > /dev/null 2>&1 && echo "Token refreshed" || echo "WARNING: Token refresh failed" >&2
+    unset CLAUDECODE  # Ensure we're not nested in another Claude Code session
+    /home/alan/.local/bin/claude -p "." --output-format text > /dev/null 2>&1 && echo "Token refreshed" || echo "WARNING: Token refresh failed" >&2
 fi
 
 exec python3 - "$CLAUDE_CREDS" "$OPENCLAW_AUTH" << 'PYEOF'
