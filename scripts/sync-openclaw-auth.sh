@@ -32,7 +32,7 @@ else
 fi
 
 exec python3 - "$CLAUDE_CREDS" "$OPENCLAW_AUTH" << 'PYEOF'
-import json, sys, subprocess, shutil
+import json, sys, subprocess, shutil, os
 
 claude_path, oc_path = sys.argv[1], sys.argv[2]
 
@@ -60,11 +60,19 @@ if expires_at_ms:
 # Sync to openclaw auth-profiles.json
 auth = json.load(open(oc_path))
 if auth["profiles"]["anthropic:default"].get("token") != token:
-    auth["profiles"]["anthropic:default"]["token"] = token
-    with open(oc_path, "w") as f:
-        json.dump(auth, f, indent=2)
-        f.write("\n")
-    print("Synced Claude Code token to openclaw")
+    try:
+        auth["profiles"]["anthropic:default"]["token"] = token
+        with open(oc_path, "w") as f:
+            json.dump(auth, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        print("Synced Claude Code token to openclaw")
+    except Exception as e:
+        print(f"FAILED to write openclaw token: {e}", file=sys.stderr)
+        sys.exit(1)
+else:
+    print("Token already synchronized")
 
 # Sync credentials to LXC 200 (spacemolt-agents)
 if shutil.which("ssh"):
@@ -81,4 +89,20 @@ if shutil.which("ssh"):
             print(f"LXC sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
     except Exception as e:
         print(f"LXC sync error: {e}", file=sys.stderr)
+
+# Restart openclaw-gateway to clear cached token
+try:
+    import subprocess
+    result = subprocess.run(
+        ["systemctl", "--user", "restart", "openclaw-gateway"],
+        capture_output=True, timeout=10
+    )
+    if result.returncode == 0:
+        print("Restarted openclaw-gateway to clear cached token")
+    else:
+        # Gateway might not be running as a systemd service, try pkill
+        subprocess.run(["pkill", "-f", "openclaw-gateway"], timeout=5)
+        print("Killed openclaw-gateway process")
+except Exception as e:
+    print(f"Could not restart gateway: {e}", file=sys.stderr)
 PYEOF
