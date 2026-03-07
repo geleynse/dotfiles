@@ -4,7 +4,7 @@
 [branch]
     autosetuprebase = always
 [alias]
-    squash = !~/scripts/git-squash.rb
+	squash = !~/scripts/git-squash
     lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --date=relative
     st = status -sb
     co = checkout

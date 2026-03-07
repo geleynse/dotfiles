@@ -62,6 +62,7 @@ usage() {
     echo "    ha       - Home Assistant via Proxmox guest exec"
     echo "    gcp      - Google Cloud instance (gcloud compute ssh)"
     echo "    immich   - Immich via Docker Compose (docker compose pull + up -d)"
+    echo "    arch     - Arch Linux server (pacman)"
     echo ""
     echo "  Example config entries:"
     echo "    proxmox|proxmox|ssh -n root@192.168.1.2"
@@ -93,7 +94,7 @@ load_servers() {
 }
 
 # Valid server types
-VALID_TYPES="proxmox debian ha gcp immich"
+VALID_TYPES="proxmox debian ha gcp immich arch"
 
 validate_type() {
     local type=$1
@@ -309,6 +310,31 @@ check_updates() {
                 echo -e "${GREEN}Up to date${NC}"
             fi
             ;;
+        arch)
+            result=$(run_cmd "$ssh_cmd" "checkupdates 2>/dev/null" "$type")
+            cmd_exit=$?
+            if [[ $cmd_exit -eq 2 ]]; then
+                echo -e "${GREEN}Up to date${NC}"
+            elif [[ $cmd_exit -eq 0 ]] && [[ -n "$result" ]]; then
+                has_updates=true
+                count=$(echo "$result" | wc -l)
+                echo -e "${YELLOW}$count packages available${NC}"
+                # Highlight critical packages
+                critical=$(echo "$result" | grep -E '^(linux|linux-lts|systemd|openssl|gnutls|sudo|openssh) ' || true)
+                if [[ -n "$critical" ]]; then
+                    echo -e "${RED}Critical:${NC}"
+                    echo "$critical"
+                fi
+                echo "$result" | grep -vE '^(linux|linux-lts|systemd|openssl|gnutls|sudo|openssh) ' | head -10
+                remaining=$((count - $(echo "$critical" | grep -c . || echo 0) - 10))
+                if [[ $remaining -gt 0 ]]; then
+                    echo "  ... and $remaining more"
+                fi
+            else
+                echo -e "${RED}Failed to check updates $(exit_code_msg $cmd_exit)${NC}"
+                [[ -n "$result" ]] && echo "$result" | head -3
+            fi
+            ;;
     esac
     echo ""
 
@@ -414,6 +440,17 @@ apply_updates() {
                 else
                     echo "$result" | tail -5
                 fi
+            fi
+            ;;
+        arch)
+            result=$(run_cmd "$ssh_cmd" "sudo pacman -Syu --noconfirm 2>&1" "$type")
+            cmd_exit=$?
+            if [[ $cmd_exit -ne 0 ]]; then
+                had_error=true
+                echo -e "${RED}Update failed $(exit_code_msg $cmd_exit)${NC}"
+                [[ -n "$result" ]] && echo "$result" | tail -10
+            else
+                echo "$result" | tail -5
             fi
             ;;
     esac
