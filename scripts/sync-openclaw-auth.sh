@@ -2,7 +2,9 @@
 # Sync Claude Code OAuth token to openclaw auth-profiles.json
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
-OPENCLAW_AUTH="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+LXC_HOST="root@192.168.1.18"
+LXC_OPENCLAW_AUTH="/home/rook/.openclaw/agents/main/agent/auth-profiles.json"
+LXC_CREDS="/home/rook/.claude/.credentials.json"
 
 # Credentials file can briefly disappear during token refresh — wait and retry
 for i in 1 2 3; do
@@ -10,7 +12,6 @@ for i in 1 2 3; do
     sleep 5
 done
 [[ -f "$CLAUDE_CREDS" ]] || { echo "No Claude Code credentials (after 3 retries)" >&2; exit 1; }
-[[ -f "$OPENCLAW_AUTH" ]] || { echo "No openclaw auth-profiles.json" >&2; exit 1; }
 
 # Auto-refresh if token expires in less than 2 hours
 # Claude Code will use the refresh_token to get a new 8-hour access token
@@ -31,12 +32,10 @@ else
     /home/alan/.local/bin/claude -p "." --output-format text > /dev/null 2>&1 && echo "Token refreshed" || echo "WARNING: Token refresh failed" >&2
 fi
 
-exec python3 - "$CLAUDE_CREDS" "$OPENCLAW_AUTH" << 'PYEOF'
-import json, sys, subprocess, shutil, os
+exec python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_OPENCLAW_AUTH" "$LXC_CREDS" << 'PYEOF'
+import json, sys, subprocess, time, os
 
-claude_path, oc_path = sys.argv[1], sys.argv[2]
-
-import time, datetime
+claude_path, lxc_host, lxc_auth_path, lxc_creds_path = sys.argv[1:5]
 
 creds = json.load(open(claude_path))
 oauth = creds.get("claudeAiOauth", {})
@@ -52,57 +51,78 @@ if expires_at_ms:
     now = time.time()
     days_left = (expires_at - now) / 86400
     if days_left < 0:
-        print(f"WARNING: Token expired {abs(days_left):.1f} days ago — run 'claude setup-token' to refresh", file=sys.stderr)
-    elif days_left < 0.5:  # less than 12 hours
-        hours_left = days_left * 24
-        print(f"NOTE: Token expires in {hours_left:.1f}h — will auto-refresh via sync when < 2h remain")
+        print(f"WARNING: Token expired {abs(days_left):.1f} days ago", file=sys.stderr)
+    elif days_left < 0.5:
+        print(f"NOTE: Token expires in {days_left * 24:.1f}h")
 
-# Sync to openclaw auth-profiles.json
-auth = json.load(open(oc_path))
-if auth["profiles"]["anthropic:default"].get("token") != token:
-    try:
-        auth["profiles"]["anthropic:default"]["token"] = token
-        with open(oc_path, "w") as f:
-            json.dump(auth, f, indent=2)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        print("Synced Claude Code token to openclaw")
-    except Exception as e:
-        print(f"FAILED to write openclaw token: {e}", file=sys.stderr)
+ssh_opts = ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes"]
+
+# Sync credentials file to LXC 109 (openclaw)
+try:
+    r = subprocess.run(
+        ["ssh"] + ssh_opts + [lxc_host, f"cat > {lxc_creds_path}"],
+        input=json.dumps(creds).encode(),
+        capture_output=True, timeout=15
+    )
+    if r.returncode == 0:
+        print("Synced credentials to LXC 109")
+    else:
+        print(f"LXC 109 creds sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
+except Exception as e:
+    print(f"LXC 109 creds sync error: {e}", file=sys.stderr)
+
+# Sync token to LXC 109 auth-profiles.json and restart gateway if changed
+try:
+    r = subprocess.run(
+        ["ssh"] + ssh_opts + [lxc_host, f"cat {lxc_auth_path}"],
+        capture_output=True, timeout=15
+    )
+    if r.returncode != 0:
+        print(f"Failed to read LXC auth-profiles: {r.stderr.decode().strip()}", file=sys.stderr)
         sys.exit(1)
-else:
-    print("Token already synchronized")
 
-# Sync credentials to LXC 200 (spacemolt-agents)
-if shutil.which("ssh"):
-    try:
+    auth = json.loads(r.stdout)
+    token_changed = auth["profiles"]["anthropic:default"].get("token") != token
+
+    if token_changed:
+        auth["profiles"]["anthropic:default"]["token"] = token
         r = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-             "spacemolt-agents", "cat > /root/.claude/.credentials.json"],
-            input=json.dumps(creds).encode(),
+            ["ssh"] + ssh_opts + [lxc_host, f"cat > {lxc_auth_path}"],
+            input=json.dumps(auth, indent=2).encode() + b"\n",
             capture_output=True, timeout=15
         )
         if r.returncode == 0:
-            print("Synced credentials to spacemolt-agents LXC")
+            print("Synced token to LXC 109 auth-profiles.json")
         else:
-            print(f"LXC sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
-    except Exception as e:
-        print(f"LXC sync error: {e}", file=sys.stderr)
+            print(f"Token sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
+            sys.exit(1)
 
-# Restart openclaw-gateway to clear cached token
-try:
-    import subprocess
-    result = subprocess.run(
-        ["systemctl", "--user", "restart", "openclaw-gateway"],
-        capture_output=True, timeout=10
-    )
-    if result.returncode == 0:
-        print("Restarted openclaw-gateway to clear cached token")
+        # Restart gateway on LXC via SSH
+        r = subprocess.run(
+            ["ssh"] + ssh_opts + [lxc_host,
+             "su - rook -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'"],
+            capture_output=True, timeout=15
+        )
+        if r.returncode == 0:
+            print("Restarted openclaw-gateway on LXC 109")
+        else:
+            print(f"Gateway restart failed: {r.stderr.decode().strip()}", file=sys.stderr)
     else:
-        # Gateway might not be running as a systemd service, try pkill
-        subprocess.run(["pkill", "-f", "openclaw-gateway"], timeout=5)
-        print("Killed openclaw-gateway process")
+        print("Token already synchronized on LXC 109")
 except Exception as e:
-    print(f"Could not restart gateway: {e}", file=sys.stderr)
+    print(f"LXC 109 auth sync error: {e}", file=sys.stderr)
+
+# Sync credentials to LXC 200 (spacemolt-agents)
+try:
+    r = subprocess.run(
+        ["ssh"] + ssh_opts + ["spacemolt-agents", "cat > /root/.claude/.credentials.json"],
+        input=json.dumps(creds).encode(),
+        capture_output=True, timeout=15
+    )
+    if r.returncode == 0:
+        print("Synced credentials to spacemolt-agents LXC")
+    else:
+        print(f"LXC 200 sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
+except Exception as e:
+    print(f"LXC 200 sync error: {e}", file=sys.stderr)
 PYEOF
