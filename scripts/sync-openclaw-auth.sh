@@ -32,6 +32,22 @@ else
     /home/alan/.local/bin/claude -p "." --output-format text > /dev/null 2>&1 && echo "Token refreshed" || echo "WARNING: Token refresh failed" >&2
 fi
 
+# Sync tasks CLI and skills to LXC 109
+TASKS_SCRIPT="$HOME/scripts/tasks"
+SKILLS_DIR="$HOME/.claude/skills"
+if [[ -f "$TASKS_SCRIPT" ]]; then
+    scp -q -o ConnectTimeout=5 -o BatchMode=yes "$TASKS_SCRIPT" "$LXC_HOST:/home/rook/scripts/tasks" 2>/dev/null && \
+        ssh -o ConnectTimeout=5 -o BatchMode=yes "$LXC_HOST" "chmod +x /home/rook/scripts/tasks" 2>/dev/null && \
+        echo "Synced tasks CLI to LXC 109" || echo "Tasks CLI sync failed" >&2
+fi
+for skill in tasks tasks-daily; do
+    if [[ -f "$SKILLS_DIR/$skill/SKILL.md" ]]; then
+        ssh -o ConnectTimeout=5 -o BatchMode=yes "$LXC_HOST" "mkdir -p /home/rook/.claude/skills/$skill" 2>/dev/null
+        scp -q -o ConnectTimeout=5 -o BatchMode=yes "$SKILLS_DIR/$skill/SKILL.md" "$LXC_HOST:/home/rook/.claude/skills/$skill/SKILL.md" 2>/dev/null && \
+            echo "Synced $skill skill to LXC 109" || echo "$skill skill sync failed" >&2
+    fi
+done
+
 exec python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_OPENCLAW_AUTH" "$LXC_CREDS" << 'PYEOF'
 import json, sys, subprocess, time, os
 
