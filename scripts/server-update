@@ -110,8 +110,8 @@ get_servers() {
 }
 
 # SSH timeout in seconds (Pi Zero W and GCP instances are slow)
-SSH_TIMEOUT=120
-GCP_TIMEOUT=120
+SSH_TIMEOUT=300
+GCP_TIMEOUT=300
 
 # Convert exit code to human-readable error message
 exit_code_msg() {

@@ -94,16 +94,25 @@ status() {
 }
 
 prune() {
+  # Per-repo retention policies
+  # Wasabi (cloud $$$): lean — monthly + yearly only
+  # NAS/Argon (local/offsite): more granular recovery points
+  declare -A RETENTION
+  RETENTION[wasabi]="--keep-monthly 6 --keep-yearly 75"
+  RETENTION[nas]="--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
+  RETENTION[argon]="--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
+
   for i in "${!REPOS[@]}"; do
     repo="${REPOS[$i]}"
     name="${REPO_NAMES[$i]}"
+    policy="${RETENTION[$name]}"
 
-    echo "=== Pruning $name ==="
+    echo "=== Pruning $name ($policy) ==="
     # Unlock stale locks before pruning
     restic -r "$repo" --password-file "$RESTIC_PASSWORD_FILE" unlock 2>/dev/null || true
 
     restic -v -r "$repo" forget \
-      --prune --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --keep-yearly 75 \
+      --prune $policy \
       --password-file "$RESTIC_PASSWORD_FILE"
   done
 }
