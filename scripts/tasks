@@ -6,6 +6,7 @@ Supports adding, querying, completing, searching, and rolling forward tasks.
 """
 
 import argparse
+import calendar
 import dataclasses
 import datetime
 import pathlib
@@ -710,7 +711,6 @@ def _most_recent_day_of_month(ordinal_str: str) -> Optional[datetime.date]:
         if TODAY.month == 1:
             prev_month = TODAY.replace(year=TODAY.year - 1, month=12, day=day)
         else:
-            import calendar
             prev_month_num = TODAY.month - 1
             max_day = calendar.monthrange(TODAY.year, prev_month_num)[1]
             actual_day = min(day, max_day)
@@ -848,6 +848,59 @@ def cmd_rollforward(args) -> int:
     return 0
 
 
+def cmd_summary(args) -> int:
+    """Quick status overview of all tasks."""
+    # Scheduled (today + overdue)
+    scheduled = [t for t in parse_tasks(TASKS_SCHEDULED) if not t.done]
+    today_tasks = [t for t in scheduled if t.date is not None and t.date <= TODAY]
+    overdue_tasks = [t for t in scheduled if t.overdue is not None]
+
+    # Inbox
+    inbox = [t for t in parse_tasks(TASKS_INBOX) if not t.done]
+
+    # Backlog by priority
+    backlog = [t for t in parse_tasks(TASKS_BACKLOG) if not t.done]
+    high = [t for t in backlog if t.priority == "high"]
+    med = [t for t in backlog if t.priority == "med"]
+    low = [t for t in backlog if t.priority == "low"]
+
+    # Projects
+    project_files = get_all_project_files()
+    project_counts = []
+    for pf in project_files:
+        name = pf.stem[len(TASKS_PROJECT_PREFIX):]
+        open_count = sum(1 for t in parse_tasks(pf) if not t.done)
+        if open_count > 0:
+            project_counts.append((name, open_count))
+
+    # Done (recent)
+    done_tasks = parse_tasks(TASKS_DONE)
+    done_today = [t for t in done_tasks if t.completed == TODAY]
+    done_week = [t for t in done_tasks
+                 if t.completed is not None and t.completed >= TODAY - datetime.timedelta(days=7)]
+
+    # Output
+    print(f"{BOLD}📋 Task Summary ({TODAY.isoformat()}){RESET}")
+    print()
+
+    if overdue_tasks:
+        print(f"  {RED}⚠ Overdue: {len(overdue_tasks)}{RESET}")
+    if today_tasks:
+        print(f"  📅 Due today: {len(today_tasks)}")
+    if inbox:
+        print(f"  📥 Inbox: {len(inbox)}")
+
+    print(f"  📝 Backlog: {len(backlog)} ({RED}{len(high)} high{RESET}, {YELLOW}{len(med)} med{RESET}, {GREEN}{len(low)} low{RESET})")
+
+    if project_counts:
+        proj_str = " · ".join(f"{name} {count}" for name, count in project_counts)
+        print(f"  🗂️  Projects: {proj_str}")
+
+    print(f"  ✅ Done: {len(done_today)} today, {len(done_week)} this week")
+
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -910,6 +963,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_search = subparsers.add_parser("search", help="Search all task files")
     p_search.add_argument("query", help="Case-insensitive substring to search for")
 
+    # summary
+    subparsers.add_parser("summary", help="Quick status overview of all tasks")
+
     return parser
 
 
@@ -936,6 +992,7 @@ def main() -> int:
         "done": cmd_done,
         "rollforward": cmd_rollforward,
         "search": cmd_search,
+        "summary": cmd_summary,
     }
 
     handler = dispatch.get(args.command)

@@ -331,3 +331,6 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 
 # OpenClaw Completion
 source "/home/alan/.openclaw/completions/openclaw.zsh"
+
+# cmux
+source "$HOME/.cmux/cmux.sh"

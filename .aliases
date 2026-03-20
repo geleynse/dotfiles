@@ -42,20 +42,59 @@ alias rainbow='colout "^.*$" rainbow'
 alias Rainbow='colout "^.*$" Rainbow'
 
 # Claude Code in tmux
+# Usage: cc [name] [claude args...]
+#   cc              -> session: claude-HHMMSS
+#   cc myproject    -> session: claude-myproject, remote control ON
 cc() {
-  local name="${1:-claude-$(date +%H%M%S)}"
-  shift 2>/dev/null
-  tmux new-session -d -s "$name" "claude $*; zsh" && tmux attach -t "$name"
+  local session_name extra_args=()
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="claude-$1"
+    extra_args=(--permission-mode bypassPermissions)
+    shift
+  else
+    session_name="claude-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "claude ${extra_args[*]} $*; zsh" && tmux attach -t "$session_name"
 }
 
 # Claude Code with specific model in tmux
-cch() { cc "haiku-$(date +%H%M%S)" --model haiku "$@"; }
-ccs() { cc "sonnet-$(date +%H%M%S)" --model sonnet "$@"; }
-cco() { cc "opus-$(date +%H%M%S)" --model opus "$@"; }
+# Usage: cch [name] [args...]  ccs [name] [args...]  cco [name] [args...]
+cch() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model haiku "$@"
+}
+ccs() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model sonnet "$@"
+}
+cco() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model opus "$@"
+}
 
 # Codex in tmux
 cx() {
-  local name="${1:-codex-$(date +%H%M%S)}"
-  shift 2>/dev/null
-  tmux new-session -d -s "$name" "codex $*; zsh" && tmux attach -t "$name"
+  local session_name
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="codex-$1"
+    shift
+  else
+    session_name="codex-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "codex $*; zsh" && tmux attach -t "$session_name"
+}
+
+# Gemini CLI in tmux
+cg() {
+  local session_name
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="gemini-$1"
+    shift
+  else
+    session_name="gemini-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "gemini $*; zsh" && tmux attach -t "$session_name"
 }
