@@ -141,4 +141,21 @@ try:
         print(f"LXC 200 sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
 except Exception as e:
     print(f"LXC 200 sync error: {e}", file=sys.stderr)
+
+# Sync credentials to CT 201 (spacemolt-staging)
+try:
+    r = subprocess.run(
+        ["ssh"] + ssh_opts + ["root@192.168.1.17",
+         "cat > /home/spacemolt/.claude/.credentials.json && "
+         "chmod 600 /home/spacemolt/.claude/.credentials.json && "
+         "chown spacemolt:spacemolt /home/spacemolt/.claude/.credentials.json"],
+        input=json.dumps(creds).encode(),
+        capture_output=True, timeout=15
+    )
+    if r.returncode == 0:
+        print("Synced credentials to spacemolt-staging CT 201")
+    else:
+        print(f"CT 201 sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
+except Exception as e:
+    print(f"CT 201 sync error: {e}", file=sys.stderr)
 PYEOF
