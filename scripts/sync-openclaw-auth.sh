@@ -1,5 +1,6 @@
 #!/bin/bash
 # Sync Claude Code OAuth token to openclaw auth-profiles.json
+set -o pipefail
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
 LXC_HOST="root@192.168.1.18"
@@ -48,7 +49,7 @@ for skill in tasks tasks-daily; do
     fi
 done
 
-exec python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_OPENCLAW_AUTH" "$LXC_CREDS" << 'PYEOF'
+timeout 90 python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_OPENCLAW_AUTH" "$LXC_CREDS" << 'PYEOF'
 import json, sys, subprocess, time, os
 
 claude_path, lxc_host, lxc_auth_path, lxc_creds_path = sys.argv[1:5]
@@ -131,7 +132,10 @@ except Exception as e:
 # Sync credentials to LXC 200 (spacemolt-agents)
 try:
     r = subprocess.run(
-        ["ssh"] + ssh_opts + ["spacemolt-agents", "cat > /root/.claude/.credentials.json"],
+        ["ssh"] + ssh_opts + ["spacemolt-agents",
+         "cat > /home/spacemolt/.claude/.credentials.json && "
+         "chmod 600 /home/spacemolt/.claude/.credentials.json && "
+         "chown spacemolt:spacemolt /home/spacemolt/.claude/.credentials.json"],
         input=json.dumps(creds).encode(),
         capture_output=True, timeout=15
     )
@@ -159,3 +163,4 @@ try:
 except Exception as e:
     print(f"CT 201 sync error: {e}", file=sys.stderr)
 PYEOF
+echo "sync-openclaw-auth completed successfully at $(date)"
