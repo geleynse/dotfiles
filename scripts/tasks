@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dendron-based task management CLI.
 
-Manages tasks stored as structured markdown in ~/Dendron/vault.personal/tasks.*.md.
+Manages tasks stored as structured markdown in ~/Obsidian/vault/tasks/.
 Supports adding, querying, completing, searching, and rolling forward tasks.
 """
 
@@ -9,6 +9,8 @@ import argparse
 import calendar
 import dataclasses
 import datetime
+import fcntl
+import hashlib
 import pathlib
 import re
 import sys
@@ -19,13 +21,13 @@ from typing import Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-VAULT_DIR = pathlib.Path.home() / "Dendron" / "vault.personal"
-TASKS_INBOX = VAULT_DIR / "tasks.inbox.md"
-TASKS_SCHEDULED = VAULT_DIR / "tasks.scheduled.md"
-TASKS_BACKLOG = VAULT_DIR / "tasks.backlog.md"
-TASKS_RECURRING = VAULT_DIR / "tasks.recurring.md"
-TASKS_DONE = VAULT_DIR / "tasks.done.md"
-TASKS_PROJECT_PREFIX = "tasks.projects."
+VAULT_DIR = pathlib.Path.home() / "Obsidian" / "vault" / "tasks"
+TASKS_INBOX = VAULT_DIR / "inbox.md"
+TASKS_SCHEDULED = VAULT_DIR / "scheduled.md"
+TASKS_BACKLOG = VAULT_DIR / "backlog.md"
+TASKS_RECURRING = VAULT_DIR / "recurring.md"
+TASKS_DONE = VAULT_DIR / "done.md"
+TASKS_PROJECT_PREFIX = "projects-"
 TODAY = datetime.date.today()
 
 # ---------------------------------------------------------------------------
@@ -209,6 +211,9 @@ def _read_frontmatter_and_heading(filepath: pathlib.Path):
     frontmatter_lines includes the --- delimiters.
     heading_line is the first # line after frontmatter.
     body_lines are everything else (stripped of trailing blank lines).
+
+    Handles files with missing frontmatter gracefully — if the first
+    non-blank line is not '---', treats the entire file as body.
     """
     if not filepath.exists():
         return [], "", []
@@ -220,6 +225,14 @@ def _read_frontmatter_and_heading(filepath: pathlib.Path):
     dash_count = 0
     frontmatter_done = False
     heading_found = False
+
+    # Check if file starts with frontmatter
+    first_content_line = next((l for l in lines if l.strip()), None)
+    has_frontmatter = first_content_line is not None and first_content_line.strip() == "---"
+
+    if not has_frontmatter:
+        # No frontmatter — treat everything as body
+        frontmatter_done = True
 
     for line in lines:
         if not frontmatter_done:
@@ -289,6 +302,86 @@ def write_tasks(filepath: pathlib.Path, tasks: list) -> None:
     # Ensure single trailing newline
     content = "\n".join(lines_out) + "\n"
     filepath.write_text(content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# File locking
+# ---------------------------------------------------------------------------
+
+class FileLock:
+    """Advisory file lock using fcntl. Use as context manager."""
+
+    def __init__(self, filepath: pathlib.Path):
+        self._lockpath = filepath.with_suffix(filepath.suffix + ".lock")
+        self._fd = None
+
+    def __enter__(self):
+        self._fd = open(self._lockpath, "w")
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
+
+
+# ---------------------------------------------------------------------------
+# Dedup helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_desc(desc: str) -> str:
+    """Normalize a task description for dedup comparison.
+
+    Lowercases, strips, collapses whitespace, removes trailing punctuation.
+    """
+    s = desc.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    s = s.rstrip(".,;:!?")
+    return s
+
+
+def _task_fingerprint(desc: str, date: Optional[datetime.date] = None) -> str:
+    """Return a dedup fingerprint for a task (description + optional date)."""
+    key = _normalize_desc(desc)
+    if date is not None:
+        key += f"|{date.isoformat()}"
+    return hashlib.md5(key.encode()).hexdigest()
+
+
+def _find_duplicates_in_file(filepath: pathlib.Path) -> tuple:
+    """Scan a task file for duplicates. Returns (unique_tasks, dup_count).
+
+    Keeps the first occurrence of each fingerprint, removes subsequent ones.
+    """
+    tasks = parse_tasks(filepath)
+    seen = set()
+    unique = []
+    dup_count = 0
+
+    for task in tasks:
+        fp = _task_fingerprint(task.description, task.date)
+        if fp in seen:
+            dup_count += 1
+            continue
+        seen.add(fp)
+        unique.append(task)
+
+    return unique, dup_count
+
+
+def _exists_in_file(filepath: pathlib.Path, description: str,
+                    date: Optional[datetime.date] = None) -> bool:
+    """Check if a task with matching fingerprint exists in a file."""
+    target_fp = _task_fingerprint(description, date)
+    tasks = parse_tasks(filepath)
+    for t in tasks:
+        if not t.done:
+            fp = _task_fingerprint(t.description, t.date)
+            if fp == target_fp:
+                return True
+    return False
 
 
 def _create_project_file(filepath: pathlib.Path, project_name: str) -> None:
@@ -378,7 +471,7 @@ def _sort_key_today(task: Task):
 # ---------------------------------------------------------------------------
 
 def cmd_add(args) -> int:
-    """Add a new task to the appropriate file."""
+    """Add a new task to the appropriate file (with dedup and locking)."""
     description = args.description
 
     # Determine target file
@@ -416,12 +509,18 @@ def cmd_add(args) -> int:
         created=TODAY,
     )
 
-    # Append task line to file
-    line = task_to_line(task)
-    with open(target, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    # Lock, dedup-check, then append
+    with FileLock(target):
+        if _exists_in_file(target, description, task_date):
+            if not getattr(args, "force", False):
+                print(f"Skipped (duplicate): {description}")
+                return 0
 
-    update_frontmatter_timestamp(target)
+        line = task_to_line(task)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        update_frontmatter_timestamp(target)
+
     print(f"Added to {target_label}: {description}")
     return 0
 
@@ -618,28 +717,38 @@ def _append_to_daily_log(task: Task) -> None:
 
 
 def cmd_done(args) -> int:
-    """Mark a task as complete by substring match."""
+    """Mark a task as complete by substring match (with locking and dedup-safe removal)."""
     query = args.description.lower()
     all_files = _all_active_files()
 
+    # Collect unique matches (dedup across files using fingerprint)
     matches = []
+    seen_fp = set()
     for f in all_files:
         tasks = parse_tasks(f)
         for t in tasks:
             if not t.done and query in t.description.lower():
-                matches.append(t)
+                fp = _task_fingerprint(t.description, t.date)
+                if fp not in seen_fp:
+                    seen_fp.add(fp)
+                    matches.append(t)
 
     if not matches:
         print(f"No matching task found for '{args.description}'.", file=sys.stderr)
         return 1
 
     if len(matches) > 1:
-        print(f"Multiple matches for '{args.description}':", file=sys.stderr)
-        for t in matches:
-            src = t.source_file.name if t.source_file else "unknown"
-            print(f"  [{src}] {t.description}", file=sys.stderr)
-        print("Multiple matches — be more specific.", file=sys.stderr)
-        return 2
+        # Try exact match first
+        exact = [t for t in matches if _normalize_desc(t.description) == _normalize_desc(args.description)]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            print(f"Multiple matches for '{args.description}':", file=sys.stderr)
+            for t in matches:
+                src = t.source_file.name if t.source_file else "unknown"
+                print(f"  [{src}] {t.description}", file=sys.stderr)
+            print("Multiple matches — be more specific.", file=sys.stderr)
+            return 2
 
     task = matches[0]
     src_name = task.source_file.name if task.source_file else "unknown"
@@ -661,16 +770,19 @@ def cmd_done(args) -> int:
     task.done = True
     task.completed = TODAY
 
-    # Append to done archive
-    _append_to_done(task)
+    # Lock the source file, remove ALL duplicates of this task, rewrite
+    target_fp = _task_fingerprint(task.description, task.date)
+    with FileLock(task.source_file):
+        source_tasks = parse_tasks(task.source_file)
+        remaining = [
+            t for t in source_tasks
+            if _task_fingerprint(t.description, t.date) != target_fp or t.done
+        ]
+        write_tasks(task.source_file, remaining)
 
-    # Remove from source file (rewrite without this task)
-    source_tasks = parse_tasks(task.source_file)
-    remaining = [
-        t for t in source_tasks
-        if not (t.description == task.description and t.line_number == task.line_number)
-    ]
-    write_tasks(task.source_file, remaining)
+    # Append to done archive (with lock)
+    with FileLock(TASKS_DONE):
+        _append_to_done(task)
 
     # Record in daily log
     _append_to_daily_log(task)
@@ -821,8 +933,8 @@ def cmd_rollforward(args) -> int:
 
         # Only generate if occurrence is newer than last-generated
         if occurrence > last_gen:
-            # Check for existing instance in scheduled
-            if not _task_exists_in_scheduled(template.description, occurrence):
+            # Check for existing instance in scheduled (use fingerprint dedup)
+            if not _exists_in_file(TASKS_SCHEDULED, template.description, occurrence):
                 new_task = Task(
                     description=template.description,
                     done=False,
@@ -831,8 +943,9 @@ def cmd_rollforward(args) -> int:
                     created=TODAY,
                 )
                 line = task_to_line(new_task)
-                with open(TASKS_SCHEDULED, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                with FileLock(TASKS_SCHEDULED):
+                    with open(TASKS_SCHEDULED, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
                 generated += 1
 
             # Update last-generated on the template (always, even if instance existed)
@@ -845,6 +958,29 @@ def cmd_rollforward(args) -> int:
             update_frontmatter_timestamp(TASKS_SCHEDULED)
 
     print(f"Rolled forward {rolled} overdue task(s). Generated {generated} recurring task(s).")
+    return 0
+
+
+def cmd_dedup(args) -> int:
+    """Remove duplicate tasks from all active files."""
+    all_files = _all_active_files() + [TASKS_DONE]
+    total_removed = 0
+
+    for filepath in all_files:
+        if not filepath.exists():
+            continue
+        with FileLock(filepath):
+            unique, dup_count = _find_duplicates_in_file(filepath)
+            if dup_count > 0:
+                write_tasks(filepath, unique)
+                total_removed += dup_count
+                print(f"  {filepath.name}: removed {dup_count} duplicate(s)")
+
+    if total_removed == 0:
+        print("No duplicates found.")
+    else:
+        print(f"\nTotal: removed {total_removed} duplicate(s)")
+
     return 0
 
 
@@ -931,6 +1067,8 @@ def build_parser() -> argparse.ArgumentParser:
                        default="med", help="Priority (default: med)")
     p_add.add_argument("--project", "-P", metavar="NAME", help="Add to project task file")
     p_add.add_argument("--inbox", "-i", action="store_true", help="Add to inbox")
+    p_add.add_argument("--force", "-f", action="store_true",
+                       help="Add even if duplicate exists")
 
     # inbox
     subparsers.add_parser("inbox", help="Show inbox tasks")
@@ -963,6 +1101,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_search = subparsers.add_parser("search", help="Search all task files")
     p_search.add_argument("query", help="Case-insensitive substring to search for")
 
+    # dedup
+    subparsers.add_parser("dedup", help="Remove duplicate tasks from all files")
+
     # summary
     subparsers.add_parser("summary", help="Quick status overview of all tasks")
 
@@ -992,6 +1133,7 @@ def main() -> int:
         "done": cmd_done,
         "rollforward": cmd_rollforward,
         "search": cmd_search,
+        "dedup": cmd_dedup,
         "summary": cmd_summary,
     }
 
