@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Quick PCBWay assembly cost estimator for prototype runs
+# Usage: pcbway-estimate [--qty N] [--layers N] [--smd N] [--tht N] [--unique N]
+
+QTY=10
+LAYERS=2
+SMD=0
+THT=0
+UNIQUE=0
+STENCIL=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --qty)    QTY="$2"; shift 2 ;;
+        --layers) LAYERS="$2"; shift 2 ;;
+        --smd)    SMD="$2"; shift 2 ;;
+        --tht)    THT="$2"; shift 2 ;;
+        --unique) UNIQUE="$2"; shift 2 ;;
+        --stencil) STENCIL=1; shift ;;
+        -h|--help)
+            echo "Usage: pcbway-estimate [options]"
+            echo "  --qty N       Board quantity (default: 10)"
+            echo "  --layers N    Layer count (default: 2)"
+            echo "  --smd N       Total SMD placements"
+            echo "  --tht N       Total THT placements (hand-solder)"
+            echo "  --unique N    Unique part numbers"
+            echo "  --stencil     Include stencil cost"
+            exit 0 ;;
+        *) echo "Unknown: $1"; exit 1 ;;
+    esac
+done
+
+python3 - "$QTY" "$LAYERS" "$SMD" "$THT" "$UNIQUE" "$STENCIL" <<'PY'
+import sys
+qty, layers, smd, tht, unique, stencil = [int(x) for x in sys.argv[1:]]
+
+# PCBWay approximate pricing (prototype quantities, March 2026)
+# These are rough estimates — actual quote depends on board size, finish, etc.
+
+# Base PCB cost
+if layers <= 2:
+    pcb_base = 5.0  # $5 for 10 boards (2-layer promo)
+    pcb_per = max(0, qty - 10) * 0.50
+elif layers <= 4:
+    pcb_base = 47.0
+    pcb_per = max(0, qty - 10) * 3.50
+else:
+    pcb_base = 100.0
+    pcb_per = max(0, qty - 10) * 8.00
+
+pcb_total = pcb_base + pcb_per
+
+# Assembly cost (PCBA)
+setup_fee = 30.0 if smd > 0 else 0
+smd_cost = smd * 0.0015 * qty  # ~$0.0015 per pad per board
+stencil_cost = 10.0 if (stencil or smd > 0) else 0
+
+# Component sourcing (rough: $0.10-0.30 per unique part, LCSC)
+component_est = unique * 0.15 * qty
+
+# Shipping (DHL to US, typical)
+shipping = 22.0
+
+total = pcb_total + setup_fee + smd_cost + stencil_cost + component_est + shipping
+
+print(f"╔══════════════════════════════════════╗")
+print(f"║    PCBWay Prototype Cost Estimate    ║")
+print(f"╠══════════════════════════════════════╣")
+print(f"║  Quantity:  {qty:>4} boards               ║")
+print(f"║  Layers:    {layers:>4}                     ║")
+print(f"║  SMD pads:  {smd:>4}                     ║")
+print(f"║  THT parts: {tht:>4} (hand-solder)       ║")
+print(f"║  Unique:    {unique:>4} part numbers        ║")
+print(f"╠══════════════════════════════════════╣")
+print(f"║  PCB fab:         ${pcb_total:>7.2f}          ║")
+if smd > 0:
+    print(f"║  Assembly setup:  ${setup_fee:>7.2f}          ║")
+    print(f"║  SMD placement:   ${smd_cost:>7.2f}          ║")
+    print(f"║  Stencil:         ${stencil_cost:>7.2f}          ║")
+if unique > 0:
+    print(f"║  Components est:  ${component_est:>7.2f}          ║")
+if tht > 0:
+    print(f"║  THT (hand):      self-solder          ║")
+print(f"║  Shipping (DHL):  ${shipping:>7.2f}          ║")
+print(f"╠══════════════════════════════════════╣")
+print(f"║  ESTIMATED TOTAL: ${total:>7.2f}          ║")
+print(f"╚══════════════════════════════════════╝")
+print()
+print("⚠️  Rough estimate only — get actual quote from pcbway.com")
+print("    Component costs vary wildly. Check LCSC stock for BOM.")
+PY

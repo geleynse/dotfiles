@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+"""Memory distillation script for Rook.
+
+Reads recent daily scratch notes, calls the AI to triage them, and:
+  - Updates/adds entries in MEMORY.md
+  - Archives completed/expired entries to the ledger
+  - Runs re-emergence detection
+  - Enforces MEMORY.md size discipline
+  - Optionally surfaces completed tasks from done archive
+
+Usage:
+    memory-distill              # run distillation pass
+    memory-distill --status     # show memory stats without modifying anything
+    memory-distill --dry-run    # show what would change, don't write
+    memory-distill --force      # run even if distilled recently (<8h)
+"""
+
+import argparse
+import atexit
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+WORKSPACE = pathlib.Path.home() / ".openclaw" / "workspace"
+MEMORY_MD = WORKSPACE / "MEMORY.md"
+SCRATCH_DIR = WORKSPACE / "memory"
+
+VAULT = pathlib.Path.home() / "memory-vault"
+LEDGER_MD = VAULT / "ledger.md"
+LEDGER_INDEX = VAULT / "ledger-index.json"
+META_DIR = VAULT / "meta"
+REMOVED_ENTRIES = META_DIR / "removed-entries.json"
+LAST_REVIEW = META_DIR / "last-review.txt"
+REVIEW_LOG = META_DIR / "review-log.md"
+OBSIDIAN_INDEX = VAULT / "obsidian" / "_index.md"
+
+DENDRON_VAULT = pathlib.Path.home() / "Dendron" / "vault.personal"
+TASKS_DONE = DENDRON_VAULT / "tasks.done.md"
+
+MEMORY_SOFT_CAP = 15_000
+MEMORY_HARD_CAP = 18_000
+LOCK_FILE = pathlib.Path.home() / ".openclaw" / "workspace" / "memory" / ".distill.lock"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def now_iso() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+def today_str() -> str:
+    return datetime.date.today().isoformat()
+
+def short_hash(text: str) -> str:
+    return hashlib.md5(text.encode()).hexdigest()[:8]
+
+def memory_size() -> int:
+    return len(MEMORY_MD.read_text(encoding="utf-8")) if MEMORY_MD.exists() else 0
+
+def atomic_write(path: pathlib.Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+        tmp = pathlib.Path(f.name)
+    os.replace(tmp, path)
+
+def load_json(path: pathlib.Path, default):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+def save_json(path: pathlib.Path, data) -> None:
+    atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+def last_review_time() -> datetime.datetime | None:
+    if not LAST_REVIEW.exists():
+        return None
+    txt = LAST_REVIEW.read_text().strip()
+    if txt == "never":
+        return None
+    try:
+        return datetime.datetime.fromisoformat(txt)
+    except ValueError:
+        return None
+
+def scratch_files_since(since: datetime.datetime | None) -> list[pathlib.Path]:
+    """Return daily scratch files newer than since, sorted oldest first."""
+    files = []
+    for p in SCRATCH_DIR.glob("*.md"):
+        if p.name.startswith("archive") or not re.match(r"\d{4}-\d{2}-\d{2}", p.name):
+            continue
+        if since is None:
+            files.append(p)
+        else:
+            mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime)
+            if mtime > since:
+                files.append(p)
+    return sorted(files, key=lambda p: p.name)
+
+def recent_done_tasks(days: int = 3) -> list[str]:
+    """Return task descriptions completed in the last N days."""
+    if not TASKS_DONE.exists():
+        return []
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    tag_re = re.compile(r"`([^:`]+):([^`]*)`")
+    done = []
+    for line in TASKS_DONE.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^- \[x\] (.+)$", line)
+        if not m:
+            continue
+        rest = m.group(1)
+        tags = {k: v for k, v in tag_re.findall(rest)}
+        desc = tag_re.sub("", rest).strip()
+        completed = tags.get("completed", "")
+        try:
+            if datetime.date.fromisoformat(completed) >= cutoff:
+                done.append(desc)
+        except ValueError:
+            pass
+    return done
+
+# ---------------------------------------------------------------------------
+# Ledger
+# ---------------------------------------------------------------------------
+
+def ledger_append(entry_id: str, category: str, summary: str, detail: str = "", source: str = "") -> None:
+    block = f"""
+---
+ID: {entry_id}
+Archived: {today_str()}
+Category: [{category}]
+Summary: {summary}
+"""
+    if detail:
+        block += f"Detail: {detail}\n"
+    if source:
+        block += f"Source: {source}\n"
+
+    existing = LEDGER_MD.read_text(encoding="utf-8") if LEDGER_MD.exists() else "# Memory Ledger\n\n"
+    atomic_write(LEDGER_MD, existing + block)
+
+    index = load_json(LEDGER_INDEX, [])
+    index.append({
+        "id": entry_id,
+        "archived": today_str(),
+        "category": category,
+        "summary": summary,
+    })
+    save_json(LEDGER_INDEX, index)
+
+def ledger_search(query: str) -> list[dict]:
+    index = load_json(LEDGER_INDEX, [])
+    q = query.lower()
+    return [e for e in index if q in e.get("summary", "").lower() or q in e.get("category", "").lower()]
+
+# ---------------------------------------------------------------------------
+# Re-emergence
+# ---------------------------------------------------------------------------
+
+def track_removed(phrase: str, reason: str = "") -> None:
+    entries = load_json(REMOVED_ENTRIES, [])
+    h = short_hash(phrase)
+    # Don't duplicate
+    if any(e["id"] == h for e in entries):
+        return
+    entries.append({
+        "id": h,
+        "phrase": phrase,
+        "removed": today_str(),
+        "reason": reason,
+    })
+    save_json(REMOVED_ENTRIES, entries)
+
+def check_reemergence(scratch_text: str) -> list[dict]:
+    """Return removed entries that appear to have re-emerged in scratch text."""
+    entries = load_json(REMOVED_ENTRIES, [])
+    scratch_lower = scratch_text.lower()
+    emerged = []
+    for e in entries:
+        phrase = e.get("phrase", "").lower()
+        if phrase and phrase in scratch_lower:
+            emerged.append(e)
+    return emerged
+
+# ---------------------------------------------------------------------------
+# Memory size enforcement
+# ---------------------------------------------------------------------------
+
+def compress_memory_if_needed(content: str, target: int = MEMORY_SOFT_CAP) -> tuple[str, list[str]]:
+    """
+    If content exceeds target, find completed/stale entries and note them for archiving.
+    Returns (possibly-trimmed content, list of removed summaries for ledger).
+    This is a heuristic — real compression is AI-driven; this is the safety valve.
+    """
+    if len(content) <= target:
+        return content, []
+
+    archived = []
+    # Find lines matching completed project patterns (heuristic)
+    lines = content.splitlines(keepends=True)
+    keep = []
+    removed_lines = []
+    stale_patterns = [
+        r"✅",
+        r"\(done\)",
+        r"\(complete\)",
+        r"- \*\*Status:\*\* .*[Cc]omplete",
+        r"Fully operational",
+    ]
+    stale_re = re.compile("|".join(stale_patterns))
+
+    for line in lines:
+        if stale_re.search(line) and len("".join(keep)) > target * 0.8:
+            removed_lines.append(line.strip())
+        else:
+            keep.append(line)
+
+    if removed_lines:
+        archived = removed_lines
+        return "".join(keep), archived
+
+    return content, []
+
+# ---------------------------------------------------------------------------
+# AI distillation call
+# ---------------------------------------------------------------------------
+
+def call_ai_distill(scratch_content: str, memory_content: str, done_tasks: list[str], emerged: list[dict]) -> dict:
+    """
+    Call claude via CLI to triage scratch notes against current memory.
+    Returns structured dict with update/add/archive/ignore decisions.
+    """
+    emerged_section = ""
+    if emerged:
+        emerged_section = "\n\n## RE-EMERGENCE ALERT\nThese topics were previously removed from memory but appeared again in scratch notes. Prioritize re-adding them:\n"
+        for e in emerged:
+            emerged_section += f"- {e['phrase']} (removed {e['removed']}: {e.get('reason', 'no reason')})\n"
+
+    done_section = ""
+    if done_tasks:
+        done_section = "\n\n## Recently Completed Tasks (from task system)\n"
+        for t in done_tasks:
+            done_section += f"- {t}\n"
+
+    prompt = f"""You are performing a memory distillation pass for an AI assistant named Rook.
+
+## Current MEMORY.md
+{memory_content}
+
+## Recent Scratch Notes (raw session logs)
+{scratch_content}
+{done_section}{emerged_section}
+
+## Instructions
+
+Review the scratch notes against the current MEMORY.md and decide what to do with each piece of information.
+
+For each decision, output a JSON block. Respond ONLY with a JSON object in this exact format:
+
+{{
+  "updates": [
+    {{"section": "Infrastructure", "old_summary": "one phrase identifying the existing entry", "new_content": "replacement text for that entry"}}
+  ],
+  "additions": [
+    {{"section": "Infrastructure", "content": "new entry text", "reason": "why this is durable and non-redundant"}}
+  ],
+  "archives": [
+    {{"summary": "one sentence about what's being archived", "detail": "optional context", "category": "decision|fact|project|lesson", "reason": "why this is no longer needed in active memory"}}
+  ],
+  "reemergences": [
+    {{"phrase": "the re-emerged topic", "content": "updated entry for MEMORY.md"}}
+  ],
+  "procedural": [
+    {{"lesson": "a pattern or lesson learned that belongs in SOUL.md Learned Behaviors"}}
+  ],
+  "summary": "one paragraph human-readable summary of what changed and why"
+}}
+
+Rules:
+- Only add entries that are DURABLE (relevant 2+ weeks), NON-OBVIOUS (not trivially knowable), and NON-REDUNDANT (not already in MEMORY.md)
+- Completed tasks/projects should be archived, not kept in active memory
+- Prefer updating existing entries over creating new ones for the same topic
+- Procedural items (lessons, patterns, failure modes) should go in procedural[] not updates/additions
+- If nothing needs to change, return empty arrays and explain in summary
+- Be conservative — fewer high-quality changes beat many low-quality ones
+- Total MEMORY.md size after changes should stay under {MEMORY_SOFT_CAP} characters
+"""
+
+    try:
+        result = subprocess.run(
+            ["claude", "--model", "claude-haiku-4-5", "--permission-mode", "bypassPermissions", "--print", "-"],
+            input=prompt, capture_output=True, text=True, timeout=120
+        )
+        output = result.stdout.strip()
+        # Extract JSON from output (may have prose wrapping)
+        json_match = re.search(r'\{.*\}', output, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+        else:
+            return {"error": "no JSON in response", "raw": output[:500]}
+    except subprocess.TimeoutExpired:
+        return {"error": "AI call timed out (120s)"}
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON parse error: {e}", "raw": output[:500] if 'output' in dir() else ""}
+    except FileNotFoundError:
+        return {"error": "claude CLI not found — is it installed and in PATH?"}
+    except subprocess.CalledProcessError as e:
+        return {"error": f"claude CLI failed (exit {e.returncode}): {e.stderr[:300] if e.stderr else 'no stderr'}"}
+
+# ---------------------------------------------------------------------------
+# Apply distillation decisions
+# ---------------------------------------------------------------------------
+
+def apply_decisions(decisions: dict, memory_content: str, dry_run: bool = False) -> tuple[str, dict]:
+    """Apply AI decisions to memory content. Returns (new_content, stats)."""
+    stats = {"updated": 0, "added": 0, "archived": 0, "remerged": 0, "procedural": 0}
+    content = memory_content
+
+    # Archives first — remove before adding to stay under cap
+    for arch in decisions.get("archives", []):
+        summary = arch.get("summary", "")
+        detail = arch.get("detail", "")
+        category = arch.get("category", "fact")
+        if not dry_run:
+            entry_id = short_hash(summary + today_str())
+            ledger_append(entry_id, category, summary, detail, source="memory-distill")
+            track_removed(summary, reason=arch.get("reason", ""))
+        stats["archived"] += 1
+
+    # Re-emergences
+    for re_entry in decisions.get("reemergences", []):
+        phrase = re_entry.get("phrase", "")
+        new_content = re_entry.get("content", "")
+        if new_content and not dry_run:
+            content += f"\n- [re-emerged] {new_content}\n"
+            # Remove from removed-entries
+            entries = load_json(REMOVED_ENTRIES, [])
+            entries = [e for e in entries if e.get("phrase", "").lower() != phrase.lower()]
+            save_json(REMOVED_ENTRIES, entries)
+        stats["remerged"] += 1
+
+    # Updates
+    for upd in decisions.get("updates", []):
+        old_summary = upd.get("old_summary", "")
+        new_text = upd.get("new_content", "")
+        if old_summary and new_text:
+            # Find line containing old_summary and replace it
+            lines = content.splitlines(keepends=True)
+            replaced = False
+            new_lines = []
+            for line in lines:
+                if old_summary.lower() in line.lower() and not replaced:
+                    new_lines.append(new_text.rstrip("\n") + "\n")
+                    replaced = True
+                else:
+                    new_lines.append(line)
+            if replaced:
+                content = "".join(new_lines)
+                stats["updated"] += 1
+
+    # Additions
+    for add in decisions.get("additions", []):
+        section = add.get("section", "")
+        new_entry = add.get("content", "")
+        if new_entry:
+            if section and f"## {section}" in content:
+                # Insert at end of that section
+                content = content.replace(
+                    f"## {section}",
+                    f"## {section}",
+                    1
+                )
+                # Find section end and insert before next ##
+                parts = re.split(r'(## )', content)
+                # Simple append to section
+                content = re.sub(
+                    rf'(## {re.escape(section)}.*?)(\n## |\Z)',
+                    lambda m: m.group(1).rstrip() + f"\n- {new_entry}\n" + m.group(2),
+                    content,
+                    count=1,
+                    flags=re.DOTALL
+                )
+            else:
+                content += f"\n- {new_entry}\n"
+            stats["added"] += 1
+
+    # Procedural learnings — log to file for human review (don't auto-write to SOUL.md)
+    procedural = decisions.get("procedural", [])
+    if procedural and not dry_run:
+        procedural_log = WORKSPACE / "memory" / "procedural-pending.md"
+        existing = procedural_log.read_text(encoding="utf-8") if procedural_log.exists() else "# Pending Procedural Learnings\n\nReview and add to SOUL.md if appropriate.\n\n"
+        for item in procedural:
+            lesson = item.get("lesson", "")
+            if lesson:
+                existing += f"- [{today_str()}] {lesson}\n"
+                stats["procedural"] += 1
+        atomic_write(procedural_log, existing)
+
+    return content, stats
+
+# ---------------------------------------------------------------------------
+# Update review log and ledger index
+# ---------------------------------------------------------------------------
+
+def update_review_log(stats: dict, before_size: int, after_size: int) -> None:
+    row = f"| {today_str()} | {stats['updated']} | {stats['added']} | {stats['archived']} | {stats['remerged']} | - | {before_size} → {after_size} |\n"
+    existing = REVIEW_LOG.read_text(encoding="utf-8") if REVIEW_LOG.exists() else "# Distillation Log\n\n| Date | Updated | Added | Archived | Re-emerged | Ignored | MEMORY.md chars |\n|------|---------|-------|----------|-----------|---------|------------------|\n"
+    atomic_write(REVIEW_LOG, existing + row)
+
+def update_obsidian_index() -> None:
+    index = load_json(LEDGER_INDEX, [])
+    recent = index[-10:][::-1]  # last 10, newest first
+    lines = ["# Memory Vault Index\n\nAgent-managed archive for Rook.\n\n## Recent Ledger Entries\n"]
+    for e in recent:
+        lines.append(f"- [{e['archived']}] `{e['category']}` — {e['summary']}\n")
+    if not recent:
+        lines.append("_(empty)_\n")
+    lines.append("\n## All Entries\n")
+    lines.append(f"Total: {len(index)} entries. See `ledger.md` for full text.\n")
+    atomic_write(OBSIDIAN_INDEX, "".join(lines))
+
+# ---------------------------------------------------------------------------
+# Git commit
+# ---------------------------------------------------------------------------
+
+def git_commit_vault(message: str) -> None:
+    try:
+        subprocess.run(["git", "-C", str(VAULT), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(VAULT), "commit", "-m", message], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        pass  # nothing to commit is fine
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_status() -> int:
+    size = memory_size()
+    pct = size / MEMORY_HARD_CAP * 100
+    bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+    last = last_review_time()
+    last_str = last.strftime("%Y-%m-%d %H:%M") if last else "never"
+    since_str = ""
+    if last:
+        delta = datetime.datetime.now() - last
+        h = int(delta.total_seconds() // 3600)
+        since_str = f" ({h}h ago)"
+
+    index = load_json(LEDGER_INDEX, [])
+    pending = scratch_files_since(last)
+    removed = load_json(REMOVED_ENTRIES, [])
+
+    print(f"🌙 Memory Status — {today_str()}")
+    print(f"MEMORY.md:    {size:,} chars  [{bar}]  {pct:.0f}% of {MEMORY_HARD_CAP:,} hard cap")
+    print(f"              soft cap {MEMORY_SOFT_CAP:,} — {'⚠️  approaching' if size > MEMORY_SOFT_CAP * 0.9 else '✅ ok'}")
+    print(f"Last review:  {last_str}{since_str}")
+    print(f"Pending:      {len(pending)} scratch file(s) since last review")
+    print(f"Ledger:       {len(index)} total entries")
+    print(f"Re-emergence: {len(removed)} tracked removed entries")
+    return 0
+
+def _acquire_lock():
+    """Acquire an exclusive lockfile. Returns the file handle or exits."""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Another distillation is already running. Exiting.", file=sys.stderr)
+        fh.close()
+        sys.exit(0)
+    fh.write(str(os.getpid()))
+    fh.flush()
+    atexit.register(lambda: (fh.close(), LOCK_FILE.unlink(missing_ok=True)))
+    return fh
+
+def cmd_distill(dry_run: bool = False, force: bool = False) -> int:
+    lock_fh = _acquire_lock()
+    last = last_review_time()
+    if last and not force:
+        delta = datetime.datetime.now() - last
+        if delta.total_seconds() < 8 * 3600:
+            print(f"Distilled {int(delta.total_seconds()//3600)}h ago. Use --force to override.")
+            return 0
+
+    scratch_files = scratch_files_since(last)
+    if not scratch_files:
+        print("No new scratch notes since last review. Nothing to distill.")
+        if not dry_run:
+            atomic_write(LAST_REVIEW, now_iso() + "\n")
+        return 0
+
+    print(f"Reading {len(scratch_files)} scratch file(s)...")
+    scratch_text = ""
+    for f in scratch_files:
+        scratch_text += f"\n\n### {f.name}\n{f.read_text(encoding='utf-8')}"
+
+    memory_content = MEMORY_MD.read_text(encoding="utf-8") if MEMORY_MD.exists() else ""
+    before_size = len(memory_content)
+
+    # Check re-emergence
+    emerged = check_reemergence(scratch_text)
+    if emerged:
+        print(f"⚡ Re-emergence detected: {len(emerged)} topic(s)")
+
+    # Recent done tasks
+    done_tasks = recent_done_tasks(days=3)
+
+    # Call AI
+    print("Calling AI for distillation decisions...")
+    decisions = call_ai_distill(scratch_text, memory_content, done_tasks, emerged)
+
+    if "error" in decisions:
+        print(f"❌ AI call failed: {decisions['error']}", file=sys.stderr)
+        return 1
+
+    if dry_run:
+        print("\n📋 Proposed changes (dry run):")
+        print(json.dumps(decisions, indent=2, ensure_ascii=False))
+        return 0
+
+    # Apply decisions
+    new_memory, stats = apply_decisions(decisions, memory_content)
+
+    # Size enforcement
+    new_memory, auto_archived = compress_memory_if_needed(new_memory)
+    for line in auto_archived:
+        entry_id = short_hash(line + today_str())
+        ledger_append(entry_id, "auto-compressed", line[:100], source="auto-compress")
+
+    after_size = len(new_memory)
+    if after_size > MEMORY_HARD_CAP:
+        print(f"⚠️  After distillation MEMORY.md is {after_size} chars (>{MEMORY_HARD_CAP}). Manual review needed.")
+
+    # Write
+    atomic_write(MEMORY_MD, new_memory)
+    atomic_write(LAST_REVIEW, now_iso() + "\n")
+    update_review_log(stats, before_size, after_size)
+    update_obsidian_index()
+    git_commit_vault(f"distill: {today_str()} — +{stats['added']} added, {stats['archived']} archived")
+
+    print(f"\n🌙 Distillation complete")
+    print(f"MEMORY.md: {before_size:,} → {after_size:,} chars")
+    print(f"Updated: {stats['updated']} | Added: {stats['added']} | Archived: {stats['archived']} | Re-emerged: {stats['remerged']}")
+    if stats["procedural"]:
+        print(f"⚙️  {stats['procedural']} procedural lesson(s) logged to memory/procedural-pending.md — review and add to SOUL.md")
+    ledger_count = len(load_json(LEDGER_INDEX, []))
+    print(f"Ledger: {ledger_count} total entries")
+    return 0
+
+def cmd_search(query: str) -> int:
+    print(f"🔍 Searching: '{query}'\n")
+    results = ledger_search(query)
+    if results:
+        print(f"── Ledger ({len(results)} match(es)) ──")
+        for r in results:
+            print(f"  [{r['id']}] {r['archived']} [{r['category']}] {r['summary']}")
+    else:
+        print("── Ledger: no matches ──")
+
+    # Also grep MEMORY.md
+    if MEMORY_MD.exists():
+        memory_lines = [l for l in MEMORY_MD.read_text(encoding="utf-8").splitlines() if query.lower() in l.lower()]
+        if memory_lines:
+            print(f"\n── MEMORY.md ({len(memory_lines)} line(s)) ──")
+            for l in memory_lines[:10]:
+                print(f"  {l.strip()}")
+    return 0
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="memory-distill", description="Memory distillation for Rook")
+    sub = p.add_subparsers(dest="command")
+
+    sub.add_parser("status", help="Show memory stats")
+    d = sub.add_parser("distill", help="Run distillation pass (default)")
+    d.add_argument("--dry-run", action="store_true", help="Show changes without writing")
+    d.add_argument("--force", action="store_true", help="Run even if recently distilled")
+    s = sub.add_parser("search", help="Search ledger and MEMORY.md")
+    s.add_argument("query", help="Search term")
+    sub.add_parser("archive-tasks", help="Archive recently completed tasks to ledger")
+
+    return p
+
+def cmd_archive_tasks() -> int:
+    """Manually archive recently completed tasks to ledger."""
+    done = recent_done_tasks(days=7)
+    if not done:
+        print("No recently completed tasks found.")
+        return 0
+    count = 0
+    for desc in done:
+        entry_id = short_hash(desc + today_str())
+        # Don't re-add if already in ledger
+        index = load_json(LEDGER_INDEX, [])
+        if any(e.get("id") == entry_id for e in index):
+            continue
+        ledger_append(entry_id, "task", desc, source="tasks.done.md")
+        count += 1
+    if count:
+        git_commit_vault(f"archive-tasks: {count} completed task(s) → ledger")
+        print(f"Archived {count} task(s) to ledger.")
+    else:
+        print("All recent tasks already in ledger.")
+    return 0
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command is None or args.command == "distill":
+        dry_run = getattr(args, "dry_run", False)
+        force = getattr(args, "force", False)
+        return cmd_distill(dry_run=dry_run, force=force)
+    elif args.command == "status":
+        return cmd_status()
+    elif args.command == "search":
+        return cmd_search(args.query)
+    elif args.command == "archive-tasks":
+        return cmd_archive_tasks()
+    else:
+        parser.print_help()
+        return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

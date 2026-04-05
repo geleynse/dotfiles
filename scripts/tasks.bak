@@ -1,0 +1,1149 @@
+#!/usr/bin/env python3
+"""Dendron-based task management CLI.
+
+Manages tasks stored as structured markdown in ~/Dendron/vault.personal/tasks.*.md.
+Supports adding, querying, completing, searching, and rolling forward tasks.
+"""
+
+import argparse
+import calendar
+import dataclasses
+import datetime
+import fcntl
+import hashlib
+import pathlib
+import re
+import sys
+import time
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+VAULT_DIR = pathlib.Path.home() / "Dendron" / "vault.personal"
+TASKS_INBOX = VAULT_DIR / "tasks.inbox.md"
+TASKS_SCHEDULED = VAULT_DIR / "tasks.scheduled.md"
+TASKS_BACKLOG = VAULT_DIR / "tasks.backlog.md"
+TASKS_RECURRING = VAULT_DIR / "tasks.recurring.md"
+TASKS_DONE = VAULT_DIR / "tasks.done.md"
+TASKS_PROJECT_PREFIX = "tasks.projects."
+TODAY = datetime.date.today()
+
+# ---------------------------------------------------------------------------
+# ANSI colors
+# ---------------------------------------------------------------------------
+
+_IS_TTY = sys.stdout.isatty()
+
+RED = "\033[91m" if _IS_TTY else ""
+YELLOW = "\033[93m" if _IS_TTY else ""
+GREEN = "\033[92m" if _IS_TTY else ""
+BOLD = "\033[1m" if _IS_TTY else ""
+RESET = "\033[0m" if _IS_TTY else ""
+WARNING = "\033[91m" if _IS_TTY else ""  # same as RED for overdue
+
+# ---------------------------------------------------------------------------
+# Regexes
+# ---------------------------------------------------------------------------
+
+# Matches a top-level task line: "- [ ] " or "- [x] " at line start
+TASK_RE = re.compile(r"^- \[([x ])\] (.*)$")
+
+# Matches indented sub-task lines: "  - " prefix (2+ spaces)
+SUBTASK_RE = re.compile(r"^  - ")
+
+# Matches backtick-wrapped key:value tags like `priority:high`
+TAG_RE = re.compile(r"`([^:`]+):([^`]*)`")
+
+# Priority ordering for sorting
+PRIORITY_ORDER = {"high": 0, "med": 1, "low": 2}
+
+# ---------------------------------------------------------------------------
+# Task dataclass
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class Task:
+    description: str
+    done: bool = False
+    priority: str = "med"
+    date: Optional[datetime.date] = None
+    created: Optional[datetime.date] = None
+    overdue: Optional[datetime.date] = None
+    completed: Optional[datetime.date] = None
+    tags: dict = dataclasses.field(default_factory=dict)
+    sub_tasks: list = dataclasses.field(default_factory=list)
+    source_file: Optional[pathlib.Path] = None
+    line_number: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Parsing and serialization
+# ---------------------------------------------------------------------------
+
+def _parse_date(val: str) -> Optional[datetime.date]:
+    """Parse a YYYY-MM-DD string, return None on failure."""
+    try:
+        return datetime.date.fromisoformat(val)
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_tasks(filepath: pathlib.Path) -> list:
+    """Read a task file and return a list of Task objects.
+
+    Skips frontmatter (between --- lines) and the heading line.
+    Indented sub-task lines (starting with '  - ') are attached to the
+    preceding top-level task.
+    """
+    if not filepath.exists():
+        return []
+
+    lines = filepath.read_text(encoding="utf-8").splitlines()
+    tasks = []
+    in_frontmatter = False
+    frontmatter_done = False
+    dash_count = 0
+    current_task: Optional[Task] = None
+    line_number = 0
+
+    for i, line in enumerate(lines):
+        line_number = i + 1
+
+        # Handle frontmatter detection
+        if not frontmatter_done:
+            if line.strip() == "---":
+                dash_count += 1
+                if dash_count == 1:
+                    in_frontmatter = True
+                    continue
+                elif dash_count == 2:
+                    in_frontmatter = False
+                    frontmatter_done = True
+                    continue
+            if in_frontmatter:
+                continue
+
+        # Skip heading lines (start with #)
+        if line.startswith("#"):
+            continue
+
+        # Check for indented sub-task
+        if SUBTASK_RE.match(line):
+            if current_task is not None:
+                current_task.sub_tasks.append(line)
+            continue
+
+        # Check for top-level task
+        m = TASK_RE.match(line)
+        if m:
+            checkbox_char, rest = m.group(1), m.group(2)
+            done = checkbox_char == "x"
+
+            # Extract all tags from the line
+            tag_matches = TAG_RE.findall(rest)
+            raw_tags = {k: v for k, v in tag_matches}
+
+            # Remove tags from description to get clean description text
+            description = TAG_RE.sub("", rest).strip()
+
+            # Parse known fields
+            priority = raw_tags.pop("priority", "med")
+            date = _parse_date(raw_tags.pop("date", ""))
+            created = _parse_date(raw_tags.pop("created", ""))
+            overdue = _parse_date(raw_tags.pop("overdue", ""))
+            completed = _parse_date(raw_tags.pop("completed", ""))
+
+            current_task = Task(
+                description=description,
+                done=done,
+                priority=priority,
+                date=date,
+                created=created,
+                overdue=overdue,
+                completed=completed,
+                tags=raw_tags,
+                sub_tasks=[],
+                source_file=filepath,
+                line_number=line_number,
+            )
+            tasks.append(current_task)
+        else:
+            # Non-task, non-subtask line — reset current task context
+            # (e.g., blank lines or other markdown)
+            current_task = None
+
+    return tasks
+
+
+def task_to_line(task: Task) -> str:
+    """Serialize a Task back to a markdown task line."""
+    checkbox = "[x]" if task.done else "[ ]"
+    parts = [f"- {checkbox} {task.description}"]
+
+    # Always include priority, created
+    parts.append(f"`priority:{task.priority}`")
+    if task.date is not None:
+        parts.append(f"`date:{task.date.isoformat()}`")
+    if task.overdue is not None:
+        parts.append(f"`overdue:{task.overdue.isoformat()}`")
+    if task.created is not None:
+        parts.append(f"`created:{task.created.isoformat()}`")
+    if task.completed is not None:
+        parts.append(f"`completed:{task.completed.isoformat()}`")
+
+    # Remaining arbitrary tags
+    for k, v in task.tags.items():
+        parts.append(f"`{k}:{v}`")
+
+    return " ".join(parts)
+
+
+def _current_ts_ms() -> int:
+    """Return current time as milliseconds since epoch."""
+    return int(time.time() * 1000)
+
+
+def _read_frontmatter_and_heading(filepath: pathlib.Path):
+    """Return (frontmatter_lines, heading_line, body_lines) from a task file.
+
+    frontmatter_lines includes the --- delimiters.
+    heading_line is the first # line after frontmatter.
+    body_lines are everything else (stripped of trailing blank lines).
+
+    Handles files with missing frontmatter gracefully — if the first
+    non-blank line is not '---', treats the entire file as body.
+    """
+    if not filepath.exists():
+        return [], "", []
+
+    lines = filepath.read_text(encoding="utf-8").splitlines()
+    frontmatter_lines = []
+    heading_line = ""
+    body_lines = []
+    dash_count = 0
+    frontmatter_done = False
+    heading_found = False
+
+    # Check if file starts with frontmatter
+    first_content_line = next((l for l in lines if l.strip()), None)
+    has_frontmatter = first_content_line is not None and first_content_line.strip() == "---"
+
+    if not has_frontmatter:
+        # No frontmatter — treat everything as body
+        frontmatter_done = True
+
+    for line in lines:
+        if not frontmatter_done:
+            frontmatter_lines.append(line)
+            if line.strip() == "---":
+                dash_count += 1
+                if dash_count == 2:
+                    frontmatter_done = True
+            continue
+
+        if not heading_found and line.startswith("#"):
+            heading_line = line
+            heading_found = True
+            continue
+
+        body_lines.append(line)
+
+    # Strip trailing blank lines from body
+    while body_lines and body_lines[-1].strip() == "":
+        body_lines.pop()
+
+    return frontmatter_lines, heading_line, body_lines
+
+
+def update_frontmatter_timestamp(filepath: pathlib.Path) -> None:
+    """Update the 'updated:' field in the file's Dendron frontmatter."""
+    if not filepath.exists():
+        return
+    content = filepath.read_text(encoding="utf-8")
+    ts = _current_ts_ms()
+    new_content = re.sub(
+        r"^(updated:\s*)\d+",
+        lambda m: f"{m.group(1)}{ts}",
+        content,
+        flags=re.MULTILINE,
+    )
+    filepath.write_text(new_content, encoding="utf-8")
+
+
+def write_tasks(filepath: pathlib.Path, tasks: list) -> None:
+    """Write a list of Task objects back to a file.
+
+    Preserves the frontmatter and heading. Updates the 'updated' timestamp.
+    Sub-tasks are written immediately after their parent task.
+    """
+    frontmatter_lines, heading_line, _ = _read_frontmatter_and_heading(filepath)
+
+    lines_out = []
+
+    # Update timestamp in frontmatter
+    ts = _current_ts_ms()
+    updated_fm = []
+    for line in frontmatter_lines:
+        updated_fm.append(re.sub(r"^(updated:\s*)\d+", f"updated: {ts}", line))
+    lines_out.extend(updated_fm)
+
+    lines_out.append("")
+    if heading_line:
+        lines_out.append(heading_line)
+    lines_out.append("")
+
+    for task in tasks:
+        lines_out.append(task_to_line(task))
+        for sub in task.sub_tasks:
+            lines_out.append(sub)
+
+    # Ensure single trailing newline
+    content = "\n".join(lines_out) + "\n"
+    filepath.write_text(content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# File locking
+# ---------------------------------------------------------------------------
+
+class FileLock:
+    """Advisory file lock using fcntl. Use as context manager."""
+
+    def __init__(self, filepath: pathlib.Path):
+        self._lockpath = filepath.with_suffix(filepath.suffix + ".lock")
+        self._fd = None
+
+    def __enter__(self):
+        self._fd = open(self._lockpath, "w")
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
+
+
+# ---------------------------------------------------------------------------
+# Dedup helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_desc(desc: str) -> str:
+    """Normalize a task description for dedup comparison.
+
+    Lowercases, strips, collapses whitespace, removes trailing punctuation.
+    """
+    s = desc.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    s = s.rstrip(".,;:!?")
+    return s
+
+
+def _task_fingerprint(desc: str, date: Optional[datetime.date] = None) -> str:
+    """Return a dedup fingerprint for a task (description + optional date)."""
+    key = _normalize_desc(desc)
+    if date is not None:
+        key += f"|{date.isoformat()}"
+    return hashlib.md5(key.encode()).hexdigest()
+
+
+def _find_duplicates_in_file(filepath: pathlib.Path) -> tuple:
+    """Scan a task file for duplicates. Returns (unique_tasks, dup_count).
+
+    Keeps the first occurrence of each fingerprint, removes subsequent ones.
+    """
+    tasks = parse_tasks(filepath)
+    seen = set()
+    unique = []
+    dup_count = 0
+
+    for task in tasks:
+        fp = _task_fingerprint(task.description, task.date)
+        if fp in seen:
+            dup_count += 1
+            continue
+        seen.add(fp)
+        unique.append(task)
+
+    return unique, dup_count
+
+
+def _exists_in_file(filepath: pathlib.Path, description: str,
+                    date: Optional[datetime.date] = None) -> bool:
+    """Check if a task with matching fingerprint exists in a file."""
+    target_fp = _task_fingerprint(description, date)
+    tasks = parse_tasks(filepath)
+    for t in tasks:
+        if not t.done:
+            fp = _task_fingerprint(t.description, t.date)
+            if fp == target_fp:
+                return True
+    return False
+
+
+def _create_project_file(filepath: pathlib.Path, project_name: str) -> None:
+    """Create a new project task file with Dendron frontmatter."""
+    ts = _current_ts_ms()
+    title = f"Tasks: {project_name.title()}"
+    content = f"""---
+id: tasks-projects-{project_name}
+title: {title}
+desc: 'Project tasks for {project_name}'
+updated: {ts}
+created: {ts}
+---
+
+# {title}
+
+"""
+    filepath.write_text(content, encoding="utf-8")
+
+
+def get_all_project_files() -> list:
+    """Return all tasks.projects.*.md files in the vault."""
+    return sorted(VAULT_DIR.glob(f"{TASKS_PROJECT_PREFIX}*.md"))
+
+
+def _all_active_files() -> list:
+    """Return all task files that hold active (non-done) tasks."""
+    files = [TASKS_INBOX, TASKS_SCHEDULED, TASKS_BACKLOG]
+    files.extend(get_all_project_files())
+    return files
+
+
+# ---------------------------------------------------------------------------
+# Output formatting
+# ---------------------------------------------------------------------------
+
+def _priority_color(priority: str) -> str:
+    if priority == "high":
+        return RED
+    elif priority == "low":
+        return GREEN
+    else:
+        return YELLOW
+
+
+def format_task(task: Task, show_source: bool = False) -> str:
+    """Format a task for terminal display with color and overdue prefix."""
+    color = _priority_color(task.priority)
+    checkbox = "[x]" if task.done else "[ ]"
+
+    prefix = ""
+    if task.overdue is not None and not task.done:
+        prefix = f"{WARNING}⚠ overdue since {task.overdue.isoformat()}{RESET} "
+
+    source_str = ""
+    if show_source and task.source_file is not None:
+        source_str = f"  {BOLD}({task.source_file.name}){RESET}"
+
+    tags_str = ""
+    tag_parts = []
+    if task.priority != "med":  # always show high/low, med is default
+        tag_parts.append(f"`priority:{task.priority}`")
+    elif task.priority == "med":
+        tag_parts.append(f"`priority:med`")
+    if task.date is not None:
+        tag_parts.append(f"`date:{task.date.isoformat()}`")
+    if task.tags:
+        for k, v in task.tags.items():
+            tag_parts.append(f"`{k}:{v}`")
+    if tag_parts:
+        tags_str = "  " + " ".join(tag_parts)
+
+    line = f"{prefix}{color}{checkbox} {task.description}{RESET}{tags_str}{source_str}"
+    return line
+
+
+def _sort_key_today(task: Task):
+    """Sort key for today's view: overdue first (by date asc), then priority."""
+    overdue_rank = 0 if task.overdue is not None else 1
+    overdue_date = task.overdue or datetime.date.max
+    priority_rank = PRIORITY_ORDER.get(task.priority, 1)
+    return (overdue_rank, overdue_date, priority_rank)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_add(args) -> int:
+    """Add a new task to the appropriate file (with dedup and locking)."""
+    description = args.description
+
+    # Determine target file
+    if args.inbox:
+        target = TASKS_INBOX
+        target_label = "inbox"
+    elif args.project:
+        target = VAULT_DIR / f"{TASKS_PROJECT_PREFIX}{args.project}.md"
+        target_label = f"project:{args.project}"
+        if not target.exists():
+            _create_project_file(target, args.project)
+            print(f"Created new project file: {target.name}")
+    elif args.date:
+        target = TASKS_SCHEDULED
+        target_label = "scheduled"
+    else:
+        target = TASKS_BACKLOG
+        target_label = "backlog"
+
+    # Parse date
+    task_date = None
+    if hasattr(args, "date") and args.date:
+        task_date = _parse_date(args.date)
+        if task_date is None:
+            print(f"Error: invalid date '{args.date}' — expected YYYY-MM-DD", file=sys.stderr)
+            return 2
+
+    # Build task
+    priority = args.priority if hasattr(args, "priority") and args.priority else "med"
+    task = Task(
+        description=description,
+        done=False,
+        priority=priority,
+        date=task_date,
+        created=TODAY,
+    )
+
+    # Lock, dedup-check, then append
+    with FileLock(target):
+        if _exists_in_file(target, description, task_date):
+            if not getattr(args, "force", False):
+                print(f"Skipped (duplicate): {description}")
+                return 0
+
+        line = task_to_line(task)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        update_frontmatter_timestamp(target)
+
+    print(f"Added to {target_label}: {description}")
+    return 0
+
+
+def cmd_today(args) -> int:
+    """Show tasks with date <= today from scheduled (and optionally project files)."""
+    files = [TASKS_SCHEDULED]
+
+    if hasattr(args, "include_all") and args.include_all:
+        files.extend(get_all_project_files())
+    elif hasattr(args, "include") and args.include:
+        for proj in args.include:
+            pf = VAULT_DIR / f"{TASKS_PROJECT_PREFIX}{proj}.md"
+            if not pf.exists():
+                print(f"Warning: no task file for project '{proj}'", file=sys.stderr)
+            else:
+                files.append(pf)
+
+    tasks = []
+    for f in files:
+        tasks.extend(parse_tasks(f))
+
+    # Filter: not done, and date <= today
+    active = [t for t in tasks if not t.done and t.date is not None and t.date <= TODAY]
+
+    if not active:
+        print("No tasks for today.")
+        return 1
+
+    active.sort(key=_sort_key_today)
+
+    print(f"{BOLD}Today's Tasks ({TODAY.isoformat()}){RESET}")
+    print()
+    for task in active:
+        show_source = hasattr(args, "include_all") and args.include_all or (
+            hasattr(args, "include") and args.include
+        )
+        print(format_task(task, show_source=bool(show_source)))
+        for sub in task.sub_tasks:
+            print(f"  {sub.strip()}")
+
+    return 0
+
+
+def _show_task_list(tasks: list, title: str, show_source: bool = False) -> int:
+    """Display a list of tasks with a heading. Returns exit code."""
+    visible = [t for t in tasks if not t.done]
+    if not visible:
+        print(f"{title}: (empty)")
+        return 1
+
+    print(f"{BOLD}{title}{RESET}")
+    print()
+    for task in visible:
+        print(format_task(task, show_source=show_source))
+        for sub in task.sub_tasks:
+            print(f"  {sub.strip()}")
+
+    return 0
+
+
+def cmd_inbox(args) -> int:
+    """Show all tasks from the inbox."""
+    tasks = parse_tasks(TASKS_INBOX)
+    return _show_task_list(tasks, "Task Inbox")
+
+
+def cmd_backlog(args) -> int:
+    """Show all tasks from the backlog."""
+    tasks = parse_tasks(TASKS_BACKLOG)
+    return _show_task_list(tasks, "Task Backlog")
+
+
+def cmd_project(args) -> int:
+    """Show tasks for a specific project."""
+    name = args.name
+    filepath = VAULT_DIR / f"{TASKS_PROJECT_PREFIX}{name}.md"
+    if not filepath.exists():
+        print(f"Error: no task file for project '{name}' ({filepath.name})", file=sys.stderr)
+        return 1
+
+    tasks = parse_tasks(filepath)
+    return _show_task_list(tasks, f"Project: {name}")
+
+
+def cmd_projects(args) -> int:
+    """List all project task files with task counts."""
+    project_files = get_all_project_files()
+    if not project_files:
+        print("No project task files found.")
+        return 1
+
+    print(f"{BOLD}Projects{RESET}")
+    print()
+    for pf in project_files:
+        name = pf.stem[len(TASKS_PROJECT_PREFIX):]
+        tasks = parse_tasks(pf)
+        total = len(tasks)
+        open_count = sum(1 for t in tasks if not t.done)
+        print(f"  {BOLD}{name}{RESET}  ({open_count} open / {total} total)  {pf.name}")
+
+    return 0
+
+
+def cmd_overdue(args) -> int:
+    """Show all overdue tasks across all files."""
+    all_files = _all_active_files()
+    overdue_tasks = []
+
+    for f in all_files:
+        tasks = parse_tasks(f)
+        for t in tasks:
+            if not t.done and t.overdue is not None:
+                overdue_tasks.append(t)
+
+    if not overdue_tasks:
+        print("No overdue tasks.")
+        return 1
+
+    overdue_tasks.sort(key=lambda t: t.overdue or datetime.date.min)
+
+    print(f"{BOLD}Overdue Tasks{RESET}")
+    print()
+    for task in overdue_tasks:
+        print(format_task(task, show_source=True))
+        for sub in task.sub_tasks:
+            print(f"  {sub.strip()}")
+
+    return 0
+
+
+def cmd_search(args) -> int:
+    """Search all task files for a substring match."""
+    query = args.query.lower()
+    all_files = list(_all_active_files()) + [TASKS_DONE]
+
+    matches = []
+    for f in all_files:
+        tasks = parse_tasks(f)
+        for t in tasks:
+            if query in t.description.lower():
+                matches.append(t)
+
+    if not matches:
+        print(f"No tasks matching '{args.query}'.")
+        return 1
+
+    print(f"{BOLD}Search: '{args.query}'{RESET}")
+    print()
+    for task in matches:
+        print(format_task(task, show_source=True))
+        for sub in task.sub_tasks:
+            print(f"  {sub.strip()}")
+
+    return 0
+
+
+def _append_to_done(task: Task) -> None:
+    """Append a completed task line to tasks.done.md."""
+    line = task_to_line(task)
+    with open(TASKS_DONE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    update_frontmatter_timestamp(TASKS_DONE)
+
+
+def _append_to_daily_log(task: Task) -> None:
+    """If today's project log exists, append task to ## Tasks Completed section."""
+    log_name = f"projects.log.{TODAY.strftime('%Y.%m.%d')}.md"
+    log_path = VAULT_DIR / log_name
+    if not log_path.exists():
+        return
+
+    content = log_path.read_text(encoding="utf-8")
+    task_line = f"- [x] {task.description} `completed:{TODAY.isoformat()}`"
+    if task.source_file:
+        task_line += f" (from `{task.source_file.name}`)"
+
+    section_header = "## Tasks Completed"
+    if section_header in content:
+        # Insert after the header line
+        content = content.replace(
+            section_header,
+            f"{section_header}\n{task_line}",
+            1,
+        )
+    else:
+        # Append section at end
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"\n{section_header}\n{task_line}\n"
+
+    log_path.write_text(content, encoding="utf-8")
+    update_frontmatter_timestamp(log_path)
+
+
+def cmd_done(args) -> int:
+    """Mark a task as complete by substring match (with locking and dedup-safe removal)."""
+    query = args.description.lower()
+    all_files = _all_active_files()
+
+    # Collect unique matches (dedup across files using fingerprint)
+    matches = []
+    seen_fp = set()
+    for f in all_files:
+        tasks = parse_tasks(f)
+        for t in tasks:
+            if not t.done and query in t.description.lower():
+                fp = _task_fingerprint(t.description, t.date)
+                if fp not in seen_fp:
+                    seen_fp.add(fp)
+                    matches.append(t)
+
+    if not matches:
+        print(f"No matching task found for '{args.description}'.", file=sys.stderr)
+        return 1
+
+    if len(matches) > 1:
+        # Try exact match first
+        exact = [t for t in matches if _normalize_desc(t.description) == _normalize_desc(args.description)]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            print(f"Multiple matches for '{args.description}':", file=sys.stderr)
+            for t in matches:
+                src = t.source_file.name if t.source_file else "unknown"
+                print(f"  [{src}] {t.description}", file=sys.stderr)
+            print("Multiple matches — be more specific.", file=sys.stderr)
+            return 2
+
+    task = matches[0]
+    src_name = task.source_file.name if task.source_file else "unknown"
+
+    print(f"Found: {format_task(task)}")
+    print(f"  in: {src_name}")
+
+    if not args.yes:
+        try:
+            answer = input("Mark as done? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return 2
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            return 2
+
+    # Mark done
+    task.done = True
+    task.completed = TODAY
+
+    # Lock the source file, remove ALL duplicates of this task, rewrite
+    target_fp = _task_fingerprint(task.description, task.date)
+    with FileLock(task.source_file):
+        source_tasks = parse_tasks(task.source_file)
+        remaining = [
+            t for t in source_tasks
+            if _task_fingerprint(t.description, t.date) != target_fp or t.done
+        ]
+        write_tasks(task.source_file, remaining)
+
+    # Append to done archive (with lock)
+    with FileLock(TASKS_DONE):
+        _append_to_done(task)
+
+    # Record in daily log
+    _append_to_daily_log(task)
+
+    print(f"Done: {task.description}")
+    return 0
+
+
+def _most_recent_weekday(weekday_name: str) -> Optional[datetime.date]:
+    """Return the most recent date (<=today) matching the given weekday name."""
+    days = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+    target = days.get(weekday_name.lower())
+    if target is None:
+        return None
+    today_wd = TODAY.weekday()
+    delta = (today_wd - target) % 7
+    return TODAY - datetime.timedelta(days=delta)
+
+
+def _most_recent_day_of_month(ordinal_str: str) -> Optional[datetime.date]:
+    """Return the most recent date (<=today) matching the ordinal day of month.
+
+    e.g. '1st' -> day 1, '15th' -> day 15
+    """
+    m = re.match(r"(\d+)", ordinal_str)
+    if not m:
+        return None
+    day = int(m.group(1))
+    # Try this month first, then previous month
+    try:
+        candidate = TODAY.replace(day=day)
+        if candidate <= TODAY:
+            return candidate
+        # Go to previous month
+        if TODAY.month == 1:
+            prev_month = TODAY.replace(year=TODAY.year - 1, month=12, day=day)
+        else:
+            prev_month_num = TODAY.month - 1
+            max_day = calendar.monthrange(TODAY.year, prev_month_num)[1]
+            actual_day = min(day, max_day)
+            prev_month = TODAY.replace(month=prev_month_num, day=actual_day)
+        return prev_month
+    except ValueError:
+        return None
+
+
+def _most_recent_from_list(dates_str: str) -> Optional[datetime.date]:
+    """Return the most recent date from a comma-separated list that is <= today."""
+    date_strs = [d.strip() for d in dates_str.split(",")]
+    candidates = []
+    for ds in date_strs:
+        d = _parse_date(ds)
+        if d is not None and d <= TODAY:
+            candidates.append(d)
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _occurrence_for_every(every_val: str) -> Optional[datetime.date]:
+    """Determine the most recent occurrence date for an 'every:' pattern."""
+    val = every_val.strip().lower()
+
+    if val == "daily":
+        return TODAY
+
+    # Weekday names
+    weekdays = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+    if val in weekdays:
+        return _most_recent_weekday(val)
+
+    # Ordinal day-of-month: 1st, 2nd, 3rd, 15th, etc.
+    if re.match(r"^\d+(st|nd|rd|th)$", val):
+        return _most_recent_day_of_month(val)
+
+    # Comma-separated date list: YYYY-MM-DD,YYYY-MM-DD,...
+    if re.match(r"^\d{4}-\d{2}-\d{2}", val):
+        return _most_recent_from_list(every_val)
+
+    return None
+
+
+def _task_exists_in_scheduled(description: str, date: datetime.date) -> bool:
+    """Check if a task with given description and date already exists in scheduled."""
+    tasks = parse_tasks(TASKS_SCHEDULED)
+    desc_lower = description.lower()
+    for t in tasks:
+        if t.description.lower() == desc_lower and t.date == date:
+            return True
+    return False
+
+
+def cmd_rollforward(args) -> int:
+    """Roll forward overdue tasks and generate recurring instances."""
+    rolled = 0
+    generated = 0
+
+    # --- Overdue rollforward ---
+    files_to_scan = [TASKS_SCHEDULED] + get_all_project_files()
+
+    for filepath in files_to_scan:
+        if not filepath.exists():
+            continue
+        tasks = parse_tasks(filepath)
+        changed = False
+        for task in tasks:
+            if task.done:
+                continue
+            if task.date is not None and task.date < TODAY:
+                # Preserve original overdue date (don't overwrite existing)
+                if task.overdue is None:
+                    task.overdue = task.date
+                task.date = TODAY
+                changed = True
+                rolled += 1
+
+        if changed:
+            write_tasks(filepath, tasks)
+
+    # --- Recurring task generation ---
+    if not TASKS_RECURRING.exists():
+        print(f"Rolled forward {rolled} overdue task(s). Generated {generated} recurring task(s).")
+        return 0
+
+    recurring_tasks = parse_tasks(TASKS_RECURRING)
+    recurring_changed = False
+    scheduled_tasks = parse_tasks(TASKS_SCHEDULED)  # load once, append as needed
+
+    for template in recurring_tasks:
+        if template.done:
+            continue
+
+        every_val = template.tags.get("every", "")
+        if not every_val:
+            continue
+
+        last_gen_str = template.tags.get("last-generated", "")
+        last_gen = _parse_date(last_gen_str) or datetime.date.min
+
+        occurrence = _occurrence_for_every(every_val)
+        if occurrence is None:
+            print(f"  Warning: unknown 'every' pattern '{every_val}' for '{template.description}'",
+                  file=sys.stderr)
+            continue
+
+        # Only generate if occurrence is newer than last-generated
+        if occurrence > last_gen:
+            # Check for existing instance in scheduled (use fingerprint dedup)
+            if not _exists_in_file(TASKS_SCHEDULED, template.description, occurrence):
+                new_task = Task(
+                    description=template.description,
+                    done=False,
+                    priority=template.priority,
+                    date=occurrence,
+                    created=TODAY,
+                )
+                line = task_to_line(new_task)
+                with FileLock(TASKS_SCHEDULED):
+                    with open(TASKS_SCHEDULED, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                generated += 1
+
+            # Update last-generated on the template (always, even if instance existed)
+            template.tags["last-generated"] = occurrence.isoformat()
+            recurring_changed = True
+
+    if recurring_changed:
+        write_tasks(TASKS_RECURRING, recurring_tasks)
+        if generated > 0:
+            update_frontmatter_timestamp(TASKS_SCHEDULED)
+
+    print(f"Rolled forward {rolled} overdue task(s). Generated {generated} recurring task(s).")
+    return 0
+
+
+def cmd_dedup(args) -> int:
+    """Remove duplicate tasks from all active files."""
+    all_files = _all_active_files() + [TASKS_DONE]
+    total_removed = 0
+
+    for filepath in all_files:
+        if not filepath.exists():
+            continue
+        with FileLock(filepath):
+            unique, dup_count = _find_duplicates_in_file(filepath)
+            if dup_count > 0:
+                write_tasks(filepath, unique)
+                total_removed += dup_count
+                print(f"  {filepath.name}: removed {dup_count} duplicate(s)")
+
+    if total_removed == 0:
+        print("No duplicates found.")
+    else:
+        print(f"\nTotal: removed {total_removed} duplicate(s)")
+
+    return 0
+
+
+def cmd_summary(args) -> int:
+    """Quick status overview of all tasks."""
+    # Scheduled (today + overdue)
+    scheduled = [t for t in parse_tasks(TASKS_SCHEDULED) if not t.done]
+    today_tasks = [t for t in scheduled if t.date is not None and t.date <= TODAY]
+    overdue_tasks = [t for t in scheduled if t.overdue is not None]
+
+    # Inbox
+    inbox = [t for t in parse_tasks(TASKS_INBOX) if not t.done]
+
+    # Backlog by priority
+    backlog = [t for t in parse_tasks(TASKS_BACKLOG) if not t.done]
+    high = [t for t in backlog if t.priority == "high"]
+    med = [t for t in backlog if t.priority == "med"]
+    low = [t for t in backlog if t.priority == "low"]
+
+    # Projects
+    project_files = get_all_project_files()
+    project_counts = []
+    for pf in project_files:
+        name = pf.stem[len(TASKS_PROJECT_PREFIX):]
+        open_count = sum(1 for t in parse_tasks(pf) if not t.done)
+        if open_count > 0:
+            project_counts.append((name, open_count))
+
+    # Done (recent)
+    done_tasks = parse_tasks(TASKS_DONE)
+    done_today = [t for t in done_tasks if t.completed == TODAY]
+    done_week = [t for t in done_tasks
+                 if t.completed is not None and t.completed >= TODAY - datetime.timedelta(days=7)]
+
+    # Output
+    print(f"{BOLD}📋 Task Summary ({TODAY.isoformat()}){RESET}")
+    print()
+
+    if overdue_tasks:
+        print(f"  {RED}⚠ Overdue: {len(overdue_tasks)}{RESET}")
+    if today_tasks:
+        print(f"  📅 Due today: {len(today_tasks)}")
+    if inbox:
+        print(f"  📥 Inbox: {len(inbox)}")
+
+    print(f"  📝 Backlog: {len(backlog)} ({RED}{len(high)} high{RESET}, {YELLOW}{len(med)} med{RESET}, {GREEN}{len(low)} low{RESET})")
+
+    if project_counts:
+        proj_str = " · ".join(f"{name} {count}" for name, count in project_counts)
+        print(f"  🗂️  Projects: {proj_str}")
+
+    print(f"  ✅ Done: {len(done_today)} today, {len(done_week)} this week")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tasks",
+        description="Dendron-based task management CLI",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    # today
+    p_today = subparsers.add_parser("today", help="Show today's scheduled tasks")
+    p_today.add_argument(
+        "--include", metavar="PROJECT", action="append",
+        help="Also include tasks from this project (repeatable)",
+    )
+    p_today.add_argument(
+        "--include-all", action="store_true",
+        help="Include all project task files",
+    )
+
+    # add
+    p_add = subparsers.add_parser("add", help="Add a new task")
+    p_add.add_argument("description", help="Task description")
+    p_add.add_argument("--date", "-d", metavar="YYYY-MM-DD", help="Schedule date")
+    p_add.add_argument("--priority", "-p", choices=["high", "med", "low"],
+                       default="med", help="Priority (default: med)")
+    p_add.add_argument("--project", "-P", metavar="NAME", help="Add to project task file")
+    p_add.add_argument("--inbox", "-i", action="store_true", help="Add to inbox")
+    p_add.add_argument("--force", "-f", action="store_true",
+                       help="Add even if duplicate exists")
+
+    # inbox
+    subparsers.add_parser("inbox", help="Show inbox tasks")
+
+    # backlog
+    subparsers.add_parser("backlog", help="Show backlog tasks")
+
+    # project
+    p_proj = subparsers.add_parser("project", help="Show tasks for a specific project")
+    p_proj.add_argument("name", help="Project name")
+
+    # projects
+    subparsers.add_parser("projects", help="List all project task files")
+
+    # overdue
+    subparsers.add_parser("overdue", help="Show all overdue tasks")
+
+    # done
+    p_done = subparsers.add_parser("done", help="Mark a task as complete")
+    p_done.add_argument("description", help="Substring to match against task description")
+    p_done.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+
+    # rollforward
+    subparsers.add_parser(
+        "rollforward",
+        help="Update overdue dates and generate recurring task instances",
+    )
+
+    # search
+    p_search = subparsers.add_parser("search", help="Search all task files")
+    p_search.add_argument("query", help="Case-insensitive substring to search for")
+
+    # dedup
+    subparsers.add_parser("dedup", help="Remove duplicate tasks from all files")
+
+    # summary
+    subparsers.add_parser("summary", help="Quick status overview of all tasks")
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command is None:
+        parser.print_help()
+        return 0
+
+    dispatch = {
+        "today": cmd_today,
+        "add": cmd_add,
+        "inbox": cmd_inbox,
+        "backlog": cmd_backlog,
+        "project": cmd_project,
+        "projects": cmd_projects,
+        "overdue": cmd_overdue,
+        "done": cmd_done,
+        "rollforward": cmd_rollforward,
+        "search": cmd_search,
+        "dedup": cmd_dedup,
+        "summary": cmd_summary,
+    }
+
+    handler = dispatch.get(args.command)
+    if handler is None:
+        print(f"Unknown command: {args.command}", file=sys.stderr)
+        return 2
+
+    return handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
