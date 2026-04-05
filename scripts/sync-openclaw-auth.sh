@@ -1,10 +1,9 @@
 #!/bin/bash
-# Sync Claude Code OAuth token to openclaw auth-profiles.json
+# Sync Claude Code OAuth token to rook-bridge (LXC 109) and fleet agents
 set -o pipefail
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
 LXC_HOST="root@192.168.1.18"
-LXC_OPENCLAW_AUTH="/home/rook/.openclaw/agents/main/agent/auth-profiles.json"
 LXC_CREDS="/home/rook/.claude/.credentials.json"
 
 # Credentials file can briefly disappear during token refresh — wait and retry
@@ -49,10 +48,10 @@ for skill in tasks tasks-daily; do
     fi
 done
 
-timeout 90 python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_OPENCLAW_AUTH" "$LXC_CREDS" << 'PYEOF'
+timeout 90 python3 - "$CLAUDE_CREDS" "$LXC_HOST" "$LXC_CREDS" << 'PYEOF'
 import json, sys, subprocess, time, os
 
-claude_path, lxc_host, lxc_auth_path, lxc_creds_path = sys.argv[1:5]
+claude_path, lxc_host, lxc_creds_path = sys.argv[1:4]
 
 creds = json.load(open(claude_path))
 oauth = creds.get("claudeAiOauth", {})
@@ -88,46 +87,18 @@ try:
 except Exception as e:
     print(f"LXC 109 creds sync error: {e}", file=sys.stderr)
 
-# Sync token to LXC 109 auth-profiles.json and restart gateway if changed
+# Restart rook-bridge on LXC 109 so it picks up the new token
 try:
     r = subprocess.run(
-        ["ssh"] + ssh_opts + [lxc_host, f"cat {lxc_auth_path}"],
+        ["ssh"] + ssh_opts + [lxc_host, "systemctl restart rook-bridge"],
         capture_output=True, timeout=15
     )
-    if r.returncode != 0:
-        print(f"Failed to read LXC auth-profiles: {r.stderr.decode().strip()}", file=sys.stderr)
-        sys.exit(1)
-
-    auth = json.loads(r.stdout)
-    token_changed = auth["profiles"]["anthropic:default"].get("token") != token
-
-    if token_changed:
-        auth["profiles"]["anthropic:default"]["token"] = token
-        r = subprocess.run(
-            ["ssh"] + ssh_opts + [lxc_host, f"cat > {lxc_auth_path}"],
-            input=json.dumps(auth, indent=2).encode() + b"\n",
-            capture_output=True, timeout=15
-        )
-        if r.returncode == 0:
-            print("Synced token to LXC 109 auth-profiles.json")
-        else:
-            print(f"Token sync failed: {r.stderr.decode().strip()}", file=sys.stderr)
-            sys.exit(1)
-
-        # Restart gateway on LXC via SSH
-        r = subprocess.run(
-            ["ssh"] + ssh_opts + [lxc_host,
-             "su - rook -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'"],
-            capture_output=True, timeout=15
-        )
-        if r.returncode == 0:
-            print("Restarted openclaw-gateway on LXC 109")
-        else:
-            print(f"Gateway restart failed: {r.stderr.decode().strip()}", file=sys.stderr)
+    if r.returncode == 0:
+        print("Restarted rook-bridge on LXC 109")
     else:
-        print("Token already synchronized on LXC 109")
+        print(f"rook-bridge restart failed: {r.stderr.decode().strip()}", file=sys.stderr)
 except Exception as e:
-    print(f"LXC 109 auth sync error: {e}", file=sys.stderr)
+    print(f"rook-bridge restart error: {e}", file=sys.stderr)
 
 # Sync credentials to LXC 200 (spacemolt-agents)
 try:

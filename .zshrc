@@ -334,3 +334,27 @@ source "/home/alan/.openclaw/completions/openclaw.zsh"
 
 # cmux
 source "$HOME/.cmux/cmux.sh"
+
+
+# Browser remote debug tunnel to rook LXC (updated 2026-04-02)
+# Chrome extension relay was removed in OpenClaw 2026.3.31
+# Now uses raw CDP: start Chrome with --remote-debugging-port=9222
+# then this reverse-tunnels it to rook:18792 for the chrome-relay profile
+rook-relay() {
+    echo "🔗 Reverse-tunneling Chrome CDP (localhost:9222) to rook:18792..."
+    echo "  Make sure Chrome is running with: google-chrome-stable --remote-debugging-port=9222"
+    echo "  Press Ctrl+C to close"
+    ssh -R 18792:localhost:9222 rook@192.168.1.18 -N
+}
+
+
+# Launch Chrome with remote debugging for rook-relay
+chrome-debug() {
+    echo "🔧 Starting Chrome with remote debugging on port 9222..."
+    echo "  Using separate data dir (~/.chrome-debug-profile)"
+    echo "  NOTE: This is a separate profile from your main Chrome"
+    google-chrome-stable --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-debug-profile &disown
+}
+
+# Interactive Claude Code session on rook (LXC 109) — contained environment, skip permission checks
+alias rook-claude='ssh -t rook "cd ~/.openclaw/workspace && ~/.local/bin/claude --dangerously-skip-permissions"'
