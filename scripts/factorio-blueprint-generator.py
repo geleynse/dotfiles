@@ -3,47 +3,44 @@
 Factorio 2.0 LTN Blueprint Generator
 
 Generates importable blueprint strings for LTN (Logistic Train Network) train
-stations with allowlist filtering and overload prevention. Outputs individual
-blueprints or a blueprint book with 1/2/3 wagon variants.
+stations (3-wagon only). Each station is a single-sided 3-row design with two
+decider combinators per side: one for inserter filtering, one for inventory
+filtering to LTN.
 
 Required mods:
   - LTN (Logistic Train Network)
   - LTN Combinator (original, 2.0-compatible)
+  - Bob's Inserters (for bob-red-inserter on the train-adjacent row)
 
 For full design documentation see:
   ~/Obsidian/vault/projects/factorio-ltn-blueprints.md  (in-game guide)
   ~/Obsidian/vault/projects/factorio-ltn-generator.md   (script & format docs)
 
-LTN 3-entity stop architecture:
-  An LTN stop is THREE separate placeable entities, all included in blueprints:
+LTN 3-entity stop architecture (all placeable in blueprints):
+  1. logistic-train-stop         — visible 2x2 stop, read_from_train enabled
+  2. logistic-train-stop-input   — lamp that feeds config INTO LTN (overlaps stop NW)
+  3. logistic-train-stop-output  — yellow CC holding the active delivery signal
+                                   (overlaps stop SW; positive=load, negative=unload)
+  Plus: ltn-combinator — holds LTN configuration, wired GREEN to the input lamp.
 
-  1. logistic-train-stop         — the visible 2x2 stop (vanilla read-train works)
-  2. logistic-train-stop-input   — 1x1 lamp: feeds config INTO LTN (from circuit net)
-  3. logistic-train-stop-output  — 1x1 yellow constant combinator: LTN writes the
-                                   active delivery signal here (positive=load,
-                                   negative=unload). This is the delivery source.
+Station layout (3 wagons, positions relative to stop at (0,0) dir=WEST):
+  y=-1.5: 18 feed/output inserters (placeholder — user wires to external belts)
+  y=-0.5: 18 chests, daisy-chained RED (contents → decider #2)
+  y=+0.5: 18 bob-red-inserters, daisy-chained RED via poles (driven by decider #1)
+  y=+2.0: 13 straight rails + 2 curved rails at ends
+  First wagon chests at x=+7.5..+12.5; 7-tile wagon pitch.
 
-  The lamp and yellow CC sit overlapping the stop's footprint (LTN gives them
-  no collision). Each has its own circuit connections, which lets us cleanly
-  subtract train-contents from delivery for overload prevention.
+Two-decider design (per side):
+  Decider #1 — drives bob-red inserter filter:
+    Provider: (output_CC RED + stop cargo ×-1) ∩ allowlist → remaining items
+    Receiver: (output_CC ×-1 through arith) ∩ allowlist → allowed unload items
+    Output RED → first pole RED → bob-red chain
+  Decider #2 — filters chest contents fed to LTN lamp (GREEN):
+    chest chain (RED) ∩ allowlist (GREEN) → OUT_GREEN → lamp
+    So LTN only sees inventory that matches the allowlist (ignores contamination).
 
-  The ltn-combinator (config) is wired GREEN → input lamp.
-
-Provider overload prevention circuit:
-  output yellow CC (red, delivery)  ──→ ┐
-  stop (red, train contents) → arith (×−1) → ┴→ decider RED input
-                                                 (combined: remaining = delivery − cargo)
-  allowlist CC (green) ──→ decider GREEN input
-
-  Decider (per-network): red Each > 0 AND green Each > 0 → output Each from red
-  Decider output (green) → load inserters (set-filters mode)
-
-  When remaining hits 0, signal vanishes → inserter filter clears → loading stops.
-
-Receiver circuit:
-  output yellow CC (red, negative request) → arith (×−1) → decider RED input
-  allowlist CC (green) → decider GREEN input
-  Decider (per-network: red Each > 0 AND green Each > 0) → unload inserters
+Dual stations stack provider (north) + receiver (south) around the rails with
+two independent sub-circuits sharing the output yellow CC and LTN lamp.
 
 Usage:
   python factorio-blueprint-generator.py --provider --allowlist iron-plate copper-plate
@@ -100,6 +97,10 @@ class Entity:
     direction: int = 0
     control_behavior: Optional[dict] = None
     station: Optional[str] = None
+    tags: Optional[dict] = None
+    always_on: Optional[bool] = None
+    pickup_position: Optional[list] = None
+    drop_position: Optional[list] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -113,6 +114,14 @@ class Entity:
             d["control_behavior"] = self.control_behavior
         if self.station:
             d["station"] = self.station
+        if self.tags:
+            d["tags"] = self.tags
+        if self.always_on is not None:
+            d["always_on"] = self.always_on
+        if self.pickup_position is not None:
+            d["pickup_position"] = self.pickup_position
+        if self.drop_position is not None:
+            d["drop_position"] = self.drop_position
         return d
 
 
@@ -165,6 +174,80 @@ def verify_blueprint(bp_string: str, label: str) -> bool:
         return False
 
 
+# ─── Layout constants ────────────────────────────────────────────────────────
+
+# Stop centered at origin (0, 0) with direction=WEST (trains approach from east).
+# Stop is 2x2, occupies tiles (-1..1) x (-1..1).
+#
+# LTN 3-entity group — lamp and output CC OVERLAP the stop's 2x2 footprint
+# (LTN gives them zero collision so this is legal):
+#   ltn-combinator at (-1.5, -0.5)          — 1 tile W of stop NW corner
+#   input lamp at    (-0.5, -0.5)           — OVERLAPS stop NW tile
+#   output CC at     (-0.5, +0.5) dir=WEST  — OVERLAPS stop SW tile
+#
+# Row layout:
+#   y=-1.5: NORTH combinators row — arith at (+2, -1.5), decider at (+4, -1.5)
+#   y=-0.5: LTN stop row — ltn-comb, lamp, allowlist CC at (+2.5, -0.5), poles, chests
+#   y=+0.0: stop (2x2 tiles at y=-1..+1)
+#   y=+0.5: LTN output CC, north inserters
+#   y=+2.0: rails (train occupies y=+1..+3)
+#   y=+3.5: SOUTH COMPACT row — poles, bob-red-inserter, chests interleaved
+#   y=+4.5: SOUTH combinators row (dual only) — arith at (+1, +4.5), decider at (+3, +4.5)
+#   y=+5.5: SOUTH allowlist CC (dual only) at (+1.5, +5.5)
+#
+# Wagons: 7-tile pitch. First wagon chest/inserter at x=+5.5..+10.5.
+# Poles at x=+4.5 (before wagon 1), +11.5 (between 1-2), +18.5 (between 2-3), +25.5 (after 3).
+
+# ─── Station layout (relative to stop center at (0, 0), dir=WEST) ────────────
+# Train approaches from the east and stops at x=0. Rails at y=+2 (wagon occupies y=+1..+3).
+# Provider/receiver standalone use only north rows (y=-1.5, -0.5, +0.5).
+# Dual adds mirrored receiver rows on south (y=+3.5, +4.5, +5.5).
+
+Y_FEED_INS = -1.5         # Feed/output inserter row (user wires to external belts)
+Y_CHEST_N = -0.5          # Chest row (same y as ltn-combinator and input lamp)
+Y_LOAD_INS = 0.5          # Bob-red inserter row (adjacent to rail, reaches train)
+Y_RAILS = 2.0             # Straight rail row
+
+# Dual-only south-side row positions (mirror of north across rails)
+Y_UNLOAD_INS = 3.5        # South bob-red inserters (unload)
+Y_CHEST_S = 4.5      # South chest row
+Y_OUTPUT_INS = 5.5        # South output inserter row
+
+WAGON_PITCH = 7           # 6-tile wagon + 1-tile gap (for power pole)
+WAGON_START_X = 7         # First wagon first tile at x=7 (first chest at x=7.5)
+INSERTERS_PER_WAGON = 6
+
+# ─── North-side combinator positions (used for provider, receiver, dual north) ─
+# arith sits WEST of decider #1 so arith OUT_RED flows straight into decider #1 RED.
+# Decider #2 sits above on the feed-inserter row, dir=WEST so its OUT_GREEN face
+# points toward the lamp on the west.
+X_ARITH_N = 3             # arith at (+3, -0.5) dir=EAST
+Y_ARITH_N = -0.5
+X_DECIDER1_N = 5          # decider #1 at (+5, -0.5) dir=EAST
+Y_DECIDER1_N = -0.5
+X_DECIDER2_N = 4          # decider #2 at (+4, -1.5) dir=WEST
+Y_DECIDER2_N = -1.5
+X_CC_N = 3.5              # allowlist CC at (+3.5, +0.5)
+Y_CC_N = 0.5
+
+# ─── South-side combinator positions (dual receiver side — mirror of north) ──
+X_ARITH_S = 3
+Y_ARITH_S = 4.5
+X_DECIDER1_S = 5
+Y_DECIDER1_S = 4.5
+X_DECIDER2_S = 4
+Y_DECIDER2_S = 5.5
+X_CC_S = 3.5
+Y_CC_S = 3.5
+
+def _pole_x_positions(wagons):
+    """Power pole x positions: one before each wagon + one after the last.
+    For wagons starting at x=+7.5 (WAGON_START_X=7) with 7-tile pitch:
+    W=3 → poles at x=+6.5, +13.5, +20.5, +27.5.
+    """
+    return [(WAGON_START_X - 0.5) + w * WAGON_PITCH for w in range(wagons + 1)]
+
+
 # ─── Shared entity builders ──────────────────────────────────────────────────
 
 def build_allowlist_cc(eid: int, position: dict, items: list[str]) -> Entity:
@@ -181,7 +264,7 @@ def build_allowlist_cc(eid: int, position: dict, items: list[str]) -> Entity:
     )
 
 
-def build_provider_decider(eid: int, position: dict) -> Entity:
+def build_provider_decider(eid: int, position: dict, direction: int = EAST) -> Entity:
     """Decider for provider stations: per-network red Each > 0 AND green Each > 0.
 
     Uses Factorio 2.0 per-network conditions to check BOTH:
@@ -189,11 +272,14 @@ def build_provider_decider(eid: int, position: dict) -> Entity:
       - Green wire: allowlist signal > 0  (item is permitted)
     Output copies count from red wire only (the remaining amount).
     When remaining hits 0, signal vanishes and inserter filter clears.
+
+    Default direction=EAST: 2-tile-wide horizontal layout (position.y at INT+0.5).
     """
     return Entity(
         entity_number=eid,
         name="decider-combinator",
         position=position,
+        direction=direction,
         control_behavior={
             "decider_conditions": {
                 "conditions": [
@@ -220,38 +306,16 @@ def build_provider_decider(eid: int, position: dict) -> Entity:
     )
 
 
-def build_receiver_decider(eid: int, position: dict) -> Entity:
-    """Decider for receiver stations: Each > 0, output Each with copy_count.
+def build_inverter(eid: int, position: dict, direction: int = EAST) -> Entity:
+    """Arithmetic combinator: Each * -1.
 
-    Simpler than provider — no quantity control needed. Just checks that the
-    combined signal (inverted delivery + allowlist) is positive.
+    Default direction=EAST: 2-tile-wide horizontal (position.y at INT+0.5).
     """
-    return Entity(
-        entity_number=eid,
-        name="decider-combinator",
-        position=position,
-        control_behavior={
-            "decider_conditions": {
-                "conditions": [{
-                    "first_signal": virtual_signal("signal-each"),
-                    "constant": 0,
-                    "comparator": ">",
-                }],
-                "outputs": [{
-                    "signal": virtual_signal("signal-each"),
-                    "copy_count_from_input": True,
-                }],
-            },
-        },
-    )
-
-
-def build_inverter(eid: int, position: dict) -> Entity:
-    """Arithmetic combinator: Each * -1."""
     return Entity(
         entity_number=eid,
         name="arithmetic-combinator",
         position=position,
+        direction=direction,
         control_behavior={
             "arithmetic_conditions": {
                 "first_signal": virtual_signal("signal-each"),
@@ -280,6 +344,112 @@ def build_blueprint(label: str, entities: list["Entity"], wires: list,
     return bp
 
 
+# ─── LTN stop group builder (3 placeable entities) ───────────────────────────
+
+def build_ltn_stop_group(ids, station_name, ltn_tags):
+    """Create the 3 LTN stop entities. Lamp and output CC OVERLAP the stop footprint
+    (LTN gives them zero collision so this is valid):
+      - stop at (0, 0) dir=WEST, 2x2
+      - input lamp at (-0.5, -0.5) — overlaps stop NW tile, always_on
+      - output CC at (-0.5, +0.5) dir=WEST — overlaps stop SW tile
+
+    Returns (stop_id, input_lamp_id, output_cc_id, entities_list).
+    """
+    entities = []
+
+    stop_id = ids.next()
+    entities.append(Entity(
+        entity_number=stop_id,
+        name="logistic-train-stop",
+        position={"x": 0, "y": 0},
+        direction=WEST,
+        station=station_name,
+        control_behavior={
+            "read_from_train": True,
+            "train_stopped_signal": virtual_signal("signal-T"),
+        },
+    ))
+
+    input_lamp_id = ids.next()
+    entities.append(Entity(
+        entity_number=input_lamp_id,
+        name="logistic-train-stop-input",
+        position={"x": -0.5, "y": -0.5},
+        control_behavior={
+            "circuit_condition": {
+                "first_signal": virtual_signal("signal-anything"),
+                "constant": 0,
+                "comparator": ">",
+            },
+            "use_colors": True,
+        },
+        always_on=True,
+    ))
+
+    output_cc_id = ids.next()
+    entities.append(Entity(
+        entity_number=output_cc_id,
+        name="logistic-train-stop-output",
+        position={"x": -0.5, "y": 0.5},
+        direction=WEST,
+        control_behavior={"sections": {"sections": [{"index": 1}]}},
+    ))
+
+    return stop_id, input_lamp_id, output_cc_id, entities
+
+
+def build_ltn_combinator(ids, ltn_tags):
+    """Create the ltn-combinator at (-1.5, -0.5), 1 tile west of stop NW corner.
+    Tags set provider/requester flags for LTN. Returns (id, entity).
+    """
+    eid = ids.next()
+    ent = Entity(
+        entity_number=eid,
+        name="ltn-combinator",
+        position={"x": -1.5, "y": -0.5},
+        control_behavior={"sections": {"sections": [{"index": 1}]}},
+        tags={"ltnc": dict(ltn_tags)},
+    )
+    return eid, ent
+
+
+def build_power_pole(ids, x, y):
+    """Medium electric pole at (x, y)."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="medium-electric-pole",
+        position={"x": x, "y": y},
+    )
+
+
+def build_rail(ids, x, y=Y_RAILS):
+    """Straight rail at (x, y) direction=EAST."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="straight-rail",
+        position={"x": x, "y": y},
+        direction=EAST,
+    )
+
+
+def build_curved_rail(ids, x, y, direction):
+    """Curved rail (curved-rail-a) at (x, y) with given direction.
+    West end of station: x=-3, dir=12 (WEST).
+    East end: x=+27 (for 3W), dir=6.
+    """
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="curved-rail-a",
+        position={"x": x, "y": y},
+        direction=direction,
+    )
+
+
+# ─── Inserter row builders ───────────────────────────────────────────────────
+
 def build_book(label: str, blueprints: list[dict]) -> dict:
     """Wrap blueprint dicts into a blueprint book."""
     entries = []
@@ -303,327 +473,334 @@ def build_book(label: str, blueprints: list[dict]) -> dict:
 
 # ─── Station generators ──────────────────────────────────────────────────────
 
-PROVIDER_DESC = (
-    "AFTER PLACING: Connect ONE red wire from the LTN yellow combinator "
-    "(auto-created output entity next to stop) to the decider combinator's "
-    "red input. This provides the delivery signal for overload prevention. "
-    "The stop reads train contents; the arithmetic inverts them; the decider "
-    "computes remaining = delivery - cargo and filters through the allowlist."
-)
 
-RECEIVER_DESC = (
-    "AFTER PLACING: Connect ONE red wire from the LTN yellow combinator "
-    "(auto-created output entity next to stop) to the arithmetic combinator's "
-    "red input. This provides the delivery signal. The arithmetic inverts "
-    "negative request signals to positive; the decider filters through the "
-    "allowlist. Extra unloading beyond the exact request amount is acceptable."
-)
+def _build_ltn_head(ids, station_name, ltn_tags, entities, wires):
+    """Build the LTN stop group + ltn-combinator with config wire.
+    Returns (stop_id, input_lamp_id, output_cc_id, ltn_id).
+    """
+    stop_id, input_lamp_id, output_cc_id, stop_ents = build_ltn_stop_group(
+        ids, station_name, ltn_tags
+    )
+    entities.extend(stop_ents)
 
-DUAL_DESC = (
-    "AFTER PLACING: Connect TWO red wires from the LTN yellow combinator "
-    "(auto-created output entity next to stop): one to the provider decider's "
-    "red input (overload prevention), one to the receiver arithmetic's red "
-    "input (delivery inversion). See vault docs for full signal flow."
-)
+    ltn_id, ltn_ent = build_ltn_combinator(ids, ltn_tags)
+    entities.append(ltn_ent)
+    add_wire(wires, ltn_id, GREEN, input_lamp_id, GREEN)
+
+    return stop_id, input_lamp_id, output_cc_id, ltn_id
 
 
 def generate_provider(
     allowlist: list[str],
-    wagons: int = 2,
-    inserters_per_wagon: int = 6,
-    load_from_top: bool = False,
+    wagons: int = 3,
     station_name: str = "LTN Provider",
 ) -> dict:
-    """Generate a provider station blueprint with overload prevention.
+    """Provider station (3-row single-sided design).
 
-    Signal flow:
-      Yellow combinator (delivery, red) ──→ ┐
-                                             ├→ decider input red = remaining
-      Stop (read train, red) → arith (×-1, red out) ──→ ┘
+    Layout per wagon (6 × 3 wagons = 18 per row):
+      y=-1.5: feed inserters — user wires to external source belts
+      y=-0.5: chests — daisy-chained RED, contents → decider #2 (provide filter)
+      y=+0.5: bob-red-inserters — daisy-chained RED via poles, driven by decider #1
 
-      Allowlist CC (green) ──→ decider input green
-
-      Decider: red Each > 0 AND green Each > 0
-               output: Each, count from red (remaining amount)
-      Decider output (green) → inserters (set-filters)
-
-    When remaining hits 0, signal vanishes → inserter filter clears → stops loading.
-    The yellow combinator wire must be connected manually after placement.
+    Sub-circuits (see _build_station_side for wiring details):
+      Decider #1 (overload prevention): output_CC + stop cargo ×−1 → filter signal
+      Decider #2 (provide filter): chest contents ∩ allowlist → lamp GREEN
     """
     ids = IDCounter()
     entities: list[Entity] = []
     wires: list = []
 
-    # ─── Logistic train stop (read stopped train enabled) ───
-    stop_id = ids.next()
-    entities.append(Entity(
-        entity_number=stop_id,
-        name="logistic-train-stop",
-        position={"x": 0, "y": 0},
-        direction=WEST,
-        station=station_name,
-        control_behavior={"read_stopped_train": True},
-    ))
+    stop_id, input_lamp_id, output_cc_id, _ = _build_ltn_head(
+        ids, station_name, {"provider": True}, entities, wires
+    )
 
-    # ─── LTN Combinator (input-only, auto-links to lamp) ───
-    ltn_id = ids.next()
-    entities.append(Entity(
-        entity_number=ltn_id,
-        name="ltn-combinator",
-        position={"x": 2, "y": 2},
-    ))
+    _, _, pole_ids = _build_station_side(
+        ids, entities, wires, wagons,
+        y_top_ins=Y_FEED_INS, y_chest=Y_CHEST_N, y_bob_ins=Y_LOAD_INS,
+        x_arith=X_ARITH_N, y_arith=Y_CHEST_N,
+        x_decider1=X_DECIDER1_N, y_decider1=Y_DECIDER1_N,
+        x_decider2=X_DECIDER2_N, y_decider2=Y_DECIDER2_N,
+        x_cc=X_CC_N, y_cc=Y_CC_N,
+        arith_input_id=stop_id,              # provider: stop cargo feeds arith
+        extra_decider1_red_input=output_cc_id,  # + output_CC for overload prev
+        input_lamp_id=input_lamp_id,
+        allowlist=allowlist,
+        side_label="provider",
+    )
 
-    # ─── Arithmetic combinator (invert train contents: Each × -1) ───
+    # Combi pole near combinators: power + lamp R/G wires
+    combi_pole_id, combi_pole_ent = build_power_pole(ids, -0.5, Y_FEED_INS)
+    entities.append(combi_pole_ent)
+    add_wire(wires, combi_pole_id, RED, input_lamp_id, RED)
+    add_wire(wires, combi_pole_id, GREEN, input_lamp_id, GREEN)
+    add_wire(wires, combi_pole_id, 5, pole_ids[0], 5)
+
+    _add_rails_with_curves(ids, wagons, entities)
+
+    return build_blueprint(station_name, entities, wires)
+
+
+def _build_station_side(
+    ids, entities, wires, wagons,
+    *,
+    y_top_ins,          # feed/output inserter row (y=-1.5 for north, y=+5.5 for south)
+    y_chest,            # chest row
+    y_bob_ins,          # bob-red inserter row (adjacent to rail)
+    x_arith, y_arith,   # arith inverter position
+    x_decider1, y_decider1,
+    x_decider2, y_decider2,
+    x_cc, y_cc,
+    arith_input_id,     # what feeds arith's RED input (stop for provider, output_CC for receiver)
+    extra_decider1_red_input=None,  # provider adds output_CC to decider #1 RED
+    input_lamp_id,
+    allowlist,
+    side_label,         # "provider" or "receiver"
+):
+    """Build one side of a station (provider-style or receiver-style).
+
+    Creates: arith + decider #1 (overload/request) + decider #2 (inventory filter)
+             + allowlist CC + feed/output inserters + chests + bob-reds + poles.
+    Wires up the circuit and returns (decider1_id, chest_ids, pole_ids, first_pole_id).
+    """
+    # Combinators
     arith_id = ids.next()
-    entities.append(build_inverter(arith_id, {"x": 4, "y": 2}))
+    entities.append(build_inverter(arith_id, {"x": x_arith, "y": y_arith}, direction=EAST))
 
-    # ─── Allowlist constant combinator ───
+    decider1_id = ids.next()
+    entities.append(build_provider_decider(decider1_id, {"x": x_decider1, "y": y_decider1}, direction=EAST))
+
+    decider2_id = ids.next()
+    entities.append(build_provider_decider(decider2_id, {"x": x_decider2, "y": y_decider2}, direction=WEST))
+
     cc_id = ids.next()
-    entities.append(build_allowlist_cc(cc_id, {"x": 6, "y": 2}, allowlist))
+    entities.append(build_allowlist_cc(cc_id, {"x": x_cc, "y": y_cc}, allowlist))
 
-    # ─── Decider combinator (per-network: red > 0 AND green > 0) ───
-    decider_id = ids.next()
-    entities.append(build_provider_decider(decider_id, {"x": 8, "y": 2}))
+    # Wiring — decider #1 (overload prevention or request filter)
+    add_wire(wires, arith_input_id, RED, arith_id, RED)
+    add_wire(wires, arith_id, OUT_RED, decider1_id, RED)
+    if extra_decider1_red_input is not None:
+        add_wire(wires, extra_decider1_red_input, RED, decider1_id, RED)
+    add_wire(wires, cc_id, GREEN, decider1_id, GREEN)
 
-    # ─── Wiring ───
-    # Stop (train contents, red) → arithmetic input
-    add_wire(wires, stop_id, RED, arith_id, RED)
-    # Arithmetic output (inverted train contents, red) → decider input red
-    # This combines on the decider's red input with the yellow combinator wire
-    # (which the user connects manually after placement)
-    add_wire(wires, arith_id, OUT_RED, decider_id, RED)
-    # Allowlist CC (green) → decider input green
-    add_wire(wires, cc_id, GREEN, decider_id, GREEN)
+    # Wiring — decider #2 (inventory filter → LTN lamp)
+    add_wire(wires, cc_id, GREEN, decider2_id, GREEN)
+    add_wire(wires, decider2_id, OUT_GREEN, input_lamp_id, GREEN)
 
-    # ─── Chests + load inserters per wagon ───
-    inserter_ids = []
+    # Top inserter row (feed or output; no circuit wires, user configures)
+    top_ins_name = "inserter"
     for w in range(wagons):
-        wagon_x = (w + 1) * -7
-        for i in range(inserters_per_wagon):
-            x = wagon_x - i
+        wagon_start = WAGON_START_X + w * WAGON_PITCH
+        for i in range(INSERTERS_PER_WAGON):
+            x = wagon_start + i + 0.5
+            iid = ids.next()
+            entities.append(Entity(iid, top_ins_name, {"x": x, "y": y_top_ins}))
 
-            if load_from_top:
-                chest_y, ins_y, ins_dir = -2, -1, SOUTH
-            else:
-                chest_y, ins_y, ins_dir = 2, 1, NORTH
+    # Chest row — daisy-chained RED, first chest → decider #2 RED
+    chest_ids = []
+    for w in range(wagons):
+        wagon_start = WAGON_START_X + w * WAGON_PITCH
+        for i in range(INSERTERS_PER_WAGON):
+            x = wagon_start + i + 0.5
+            cid = ids.next()
+            entities.append(Entity(cid, "steel-chest", {"x": x, "y": y_chest}))
+            chest_ids.append(cid)
+    for i in range(len(chest_ids) - 1):
+        add_wire(wires, chest_ids[i], RED, chest_ids[i + 1], RED)
+    add_wire(wires, decider2_id, RED, chest_ids[0], RED)
 
-            chest_id = ids.next()
-            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": chest_y}))
+    # Bob-red row — daisy-chained RED via poles, driven by decider #1 OUT_RED
+    pole_ids = []
+    for x in _pole_x_positions(wagons):
+        pid, pent = build_power_pole(ids, x, y_bob_ins)
+        entities.append(pent)
+        pole_ids.append(pid)
 
-            ins_id = ids.next()
+    ins_groups = []
+    for w in range(wagons):
+        wagon_start = WAGON_START_X + w * WAGON_PITCH
+        wagon_ins = []
+        for i in range(INSERTERS_PER_WAGON):
+            x = wagon_start + i + 0.5
+            iid = ids.next()
             entities.append(Entity(
-                entity_number=ins_id,
-                name="bulk-inserter",
-                position={"x": x, "y": ins_y},
-                direction=ins_dir,
-                control_behavior={"circuit_mode_of_operation": 1},
+                entity_number=iid,
+                name="bob-red-inserter",
+                position={"x": x, "y": y_bob_ins},
+                control_behavior={
+                    "circuit_mode_of_operation": 1,
+                    "circuit_set_stack_size": False,
+                },
             ))
-            inserter_ids.append(ins_id)
+            wagon_ins.append(iid)
+        ins_groups.append(wagon_ins)
 
-    # Decider output → all inserters (green)
-    for ins_id in inserter_ids:
-        add_wire(wires, decider_id, OUT_GREEN, ins_id, GREEN)
+    for w, ins_group in enumerate(ins_groups):
+        if not ins_group:
+            continue
+        add_wire(wires, pole_ids[w], RED, ins_group[0], RED)
+        for i in range(len(ins_group) - 1):
+            add_wire(wires, ins_group[i], RED, ins_group[i + 1], RED)
+        add_wire(wires, ins_group[-1], RED, pole_ids[w + 1], RED)
 
-    return build_blueprint(station_name, entities, wires, description=PROVIDER_DESC)
+    add_wire(wires, decider1_id, OUT_RED, pole_ids[0], RED)
+
+    # Copper wires along the pole row
+    for i in range(len(pole_ids) - 1):
+        add_wire(wires, pole_ids[i], 5, pole_ids[i + 1], 5)
+
+    return decider1_id, chest_ids, pole_ids
+
+
+def _add_rails_with_curves(ids, wagons, entities):
+    """Add 13+ straight rails (y=+2, 2-tile pitch) with curved rails at both ends.
+
+    For W=3: straight rails x=0..+24 (13 total), curved at x=-3 dir=WEST and x=+27 dir=6.
+    """
+    straight_end_x = wagons * WAGON_PITCH + 3  # For W=3: +24
+    for x in range(0, straight_end_x + 1, 2):
+        _, rent = build_rail(ids, x, Y_RAILS)
+        entities.append(rent)
+    _, cw = build_curved_rail(ids, -3, Y_RAILS, WEST)
+    entities.append(cw)
+    _, ce = build_curved_rail(ids, straight_end_x + 3, Y_RAILS, 6)
+    entities.append(ce)
 
 
 def generate_receiver(
     allowlist: list[str],
-    wagons: int = 2,
-    inserters_per_wagon: int = 6,
+    wagons: int = 3,
     station_name: str = "LTN Receiver",
 ) -> dict:
-    """Generate a receiver station blueprint.
+    """Receiver station (new 3-row single-sided design, mirror of provider wiring).
 
-    Signal flow:
-      Yellow combinator (delivery, red) → arithmetic (×-1) → decider input red
-      Allowlist CC (green) → decider input green
-      Decider (Each > 0, copy count) output (green) → inserters (set-filters)
+    Layout per wagon (6 each × 3 wagons = 18 per row):
+      y=-1.5: output inserters — user wires to take items from chests to external belts
+      y=-0.5: chests — daisy-chained RED, contents feed decider #2 (inventory filter)
+      y=+0.5: bob-red-inserters (UNLOAD: pick train → drop chest), driven by decider #1
 
-    No quantity control — inserters unload all matching items. Extra unloading
-    is acceptable per design. The yellow combinator wire must be connected
-    manually after placement.
+    Note: bob-red directions may need configuration in-game to get unload behavior.
+
+    Two sub-circuits:
+      Decider #1 (request/unload filter):
+        output_CC (RED, negative requests) → arith (×-1) → decider #1 RED input (positive)
+        allowlist_CC (GREEN) → decider #1 GREEN input
+        decider #1 OUT_RED → pole → bob-red chain (only allowed items get unloaded)
+      Decider #2 (inventory filter → LTN lamp):
+        chest chain (RED) → decider #2 RED input
+        allowlist_CC (GREEN) → decider #2 GREEN input
+        decider #2 OUT_GREEN → lamp (tells LTN what's currently stored)
     """
     ids = IDCounter()
     entities: list[Entity] = []
     wires: list = []
 
-    stop_id = ids.next()
-    entities.append(Entity(
-        entity_number=stop_id,
-        name="logistic-train-stop",
-        position={"x": 0, "y": 0},
-        direction=WEST,
-        station=station_name,
-    ))
+    stop_id, input_lamp_id, output_cc_id, _ = _build_ltn_head(
+        ids, station_name, {"requester": True}, entities, wires
+    )
 
-    ltn_id = ids.next()
-    entities.append(Entity(
-        entity_number=ltn_id,
-        name="ltn-combinator",
-        position={"x": 2, "y": 2},
-    ))
+    _, _, pole_ids = _build_station_side(
+        ids, entities, wires, wagons,
+        y_top_ins=Y_FEED_INS, y_chest=Y_CHEST_N, y_bob_ins=Y_LOAD_INS,
+        x_arith=X_ARITH_N, y_arith=Y_CHEST_N,
+        x_decider1=X_DECIDER1_N, y_decider1=Y_DECIDER1_N,
+        x_decider2=X_DECIDER2_N, y_decider2=Y_DECIDER2_N,
+        x_cc=X_CC_N, y_cc=Y_CC_N,
+        arith_input_id=output_cc_id,  # receiver: output_CC feeds arith (not stop)
+        extra_decider1_red_input=None,  # receiver: no cargo subtraction
+        input_lamp_id=input_lamp_id,
+        allowlist=allowlist,
+        side_label="receiver",
+    )
 
-    # Arithmetic: invert delivery signals (negative → positive for set-filters)
-    arith_id = ids.next()
-    entities.append(build_inverter(arith_id, {"x": 4, "y": 2}))
+    # Combi pole near combinators (provides power + wires lamp R/G)
+    combi_pole_id, combi_pole_ent = build_power_pole(ids, -0.5, Y_FEED_INS)
+    entities.append(combi_pole_ent)
+    add_wire(wires, combi_pole_id, RED, input_lamp_id, RED)
+    add_wire(wires, combi_pole_id, GREEN, input_lamp_id, GREEN)
+    add_wire(wires, combi_pole_id, 5, pole_ids[0], 5)
 
-    cc_id = ids.next()
-    entities.append(build_allowlist_cc(cc_id, {"x": 6, "y": 2}, allowlist))
+    _add_rails_with_curves(ids, wagons, entities)
 
-    decider_id = ids.next()
-    entities.append(build_receiver_decider(decider_id, {"x": 8, "y": 2}))
-
-    # Yellow combinator wire is manual — arith input is the connection point.
-    # Arith output (inverted, red) → decider input red
-    add_wire(wires, arith_id, OUT_RED, decider_id, RED)
-    # Allowlist CC (green) → decider input green
-    add_wire(wires, cc_id, GREEN, decider_id, GREEN)
-
-    # Unload inserters + chests (top side)
-    inserter_ids = []
-    for w in range(wagons):
-        wagon_x = (w + 1) * -7
-        for i in range(inserters_per_wagon):
-            x = wagon_x - i
-
-            chest_id = ids.next()
-            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": -2}))
-
-            ins_id = ids.next()
-            entities.append(Entity(
-                entity_number=ins_id,
-                name="bulk-inserter",
-                position={"x": x, "y": -1},
-                direction=NORTH,
-                control_behavior={"circuit_mode_of_operation": 1},
-            ))
-            inserter_ids.append(ins_id)
-
-    for ins_id in inserter_ids:
-        add_wire(wires, decider_id, OUT_GREEN, ins_id, GREEN)
-
-    return build_blueprint(station_name, entities, wires, description=RECEIVER_DESC)
+    return build_blueprint(station_name, entities, wires)
 
 
 def generate_dual(
     provide_allowlist: list[str],
     request_allowlist: list[str],
-    wagons: int = 2,
-    inserters_per_wagon: int = 6,
+    wagons: int = 3,
     station_name: str = "LTN Dual",
 ) -> dict:
-    """Generate a dual-mode station (provider + receiver).
+    """Dual station (provider on NORTH side + receiver on SOUTH side of rails).
 
-    Provider path (bottom inserters — load items onto train):
-      Yellow combinator (red) + stop read-train → arith (×-1) → remaining on red
-      → provider decider (per-network) + provider CC (green) → load inserters
+    Six rows stacked around the rails at y=+2:
+      y=-1.5: provider feed inserters
+      y=-0.5: provider chests
+      y=+0.5: provider load bob-reds
+      y=+2:   rails
+      y=+3.5: receiver unload bob-reds
+      y=+4.5: receiver chests
+      y=+5.5: receiver output inserters
 
-    Receiver path (top inserters — unload items from train):
-      Yellow combinator (red) → arith #2 (×-1) → decider + receiver CC → unload inserters
-
-    Two manual red wires from yellow combinator needed after placement.
+    Each side has its own arith/decider#1/decider#2/allowlist CC — two fully
+    independent sub-circuits that share the output yellow CC and the LTN lamp
+    (both decider#2s feed GREEN into the lamp so LTN sees combined inventory).
     """
     ids = IDCounter()
     entities: list[Entity] = []
     wires: list = []
 
-    stop_id = ids.next()
-    entities.append(Entity(
-        entity_number=stop_id,
-        name="logistic-train-stop",
-        position={"x": 0, "y": 0},
-        direction=WEST,
-        station=station_name,
-        control_behavior={"read_stopped_train": True},
-    ))
+    stop_id, input_lamp_id, output_cc_id, _ = _build_ltn_head(
+        ids, station_name, {"provider": True, "requester": True}, entities, wires
+    )
 
-    ltn_id = ids.next()
-    entities.append(Entity(
-        entity_number=ltn_id,
-        name="ltn-combinator",
-        position={"x": 2, "y": 3},
-    ))
+    # NORTH side (provider)
+    _, _, north_pole_ids = _build_station_side(
+        ids, entities, wires, wagons,
+        y_top_ins=Y_FEED_INS, y_chest=Y_CHEST_N, y_bob_ins=Y_LOAD_INS,
+        x_arith=X_ARITH_N, y_arith=Y_CHEST_N,
+        x_decider1=X_DECIDER1_N, y_decider1=Y_DECIDER1_N,
+        x_decider2=X_DECIDER2_N, y_decider2=Y_DECIDER2_N,
+        x_cc=X_CC_N, y_cc=Y_CC_N,
+        arith_input_id=stop_id,  # provider: stop cargo feeds arith
+        extra_decider1_red_input=output_cc_id,  # + output_CC for overload prev
+        input_lamp_id=input_lamp_id,
+        allowlist=provide_allowlist,
+        side_label="provider",
+    )
 
-    # ═══ PROVIDER PATH (bottom — load onto train) ═══
+    # SOUTH side (receiver)
+    _, _, south_pole_ids = _build_station_side(
+        ids, entities, wires, wagons,
+        y_top_ins=Y_OUTPUT_INS, y_chest=Y_CHEST_S, y_bob_ins=Y_UNLOAD_INS,
+        x_arith=X_ARITH_S, y_arith=Y_DECIDER1_S,
+        x_decider1=X_DECIDER1_S, y_decider1=Y_DECIDER1_S,
+        x_decider2=X_DECIDER2_S, y_decider2=Y_DECIDER2_S,
+        x_cc=X_CC_S, y_cc=Y_CC_S,
+        arith_input_id=output_cc_id,  # receiver: output_CC feeds arith
+        extra_decider1_red_input=None,
+        input_lamp_id=input_lamp_id,
+        allowlist=request_allowlist,
+        side_label="receiver",
+    )
 
-    # Arithmetic: invert train contents for subtraction
-    prov_arith_id = ids.next()
-    entities.append(build_inverter(prov_arith_id, {"x": 4, "y": 3}))
+    # Power poles near combinators (one north for provider, one south for receiver)
+    north_combi_pole_id, north_combi_pole_ent = build_power_pole(ids, -0.5, Y_FEED_INS)
+    entities.append(north_combi_pole_ent)
+    add_wire(wires, north_combi_pole_id, RED, input_lamp_id, RED)
+    add_wire(wires, north_combi_pole_id, GREEN, input_lamp_id, GREEN)
+    add_wire(wires, north_combi_pole_id, 5, north_pole_ids[0], 5)
 
-    prov_cc_id = ids.next()
-    entities.append(build_allowlist_cc(prov_cc_id, {"x": 6, "y": 3}, provide_allowlist))
+    south_combi_pole_id, south_combi_pole_ent = build_power_pole(ids, -0.5, Y_OUTPUT_INS)
+    entities.append(south_combi_pole_ent)
+    add_wire(wires, south_combi_pole_id, 5, south_pole_ids[0], 5)
 
-    prov_decider_id = ids.next()
-    entities.append(build_provider_decider(prov_decider_id, {"x": 8, "y": 3}))
+    # Connect the two pole networks via copper (same-index poles across rows)
+    for i in range(min(len(north_pole_ids), len(south_pole_ids))):
+        add_wire(wires, north_pole_ids[i], 5, south_pole_ids[i], 5)
 
-    # Stop (train contents) → provider arithmetic
-    add_wire(wires, stop_id, RED, prov_arith_id, RED)
-    # Provider arithmetic output → provider decider red input
-    add_wire(wires, prov_arith_id, OUT_RED, prov_decider_id, RED)
-    # Provider allowlist → provider decider green input
-    add_wire(wires, prov_cc_id, GREEN, prov_decider_id, GREEN)
+    _add_rails_with_curves(ids, wagons, entities)
 
-    # ═══ RECEIVER PATH (top — unload from train) ═══
-
-    # Arithmetic: invert delivery signals (negative → positive)
-    recv_arith_id = ids.next()
-    entities.append(build_inverter(recv_arith_id, {"x": 4, "y": 5}))
-
-    recv_cc_id = ids.next()
-    entities.append(build_allowlist_cc(recv_cc_id, {"x": 6, "y": 5}, request_allowlist))
-
-    recv_decider_id = ids.next()
-    entities.append(build_receiver_decider(recv_decider_id, {"x": 8, "y": 5}))
-
-    # Yellow combinator wire to recv_arith is manual
-    # Receiver arithmetic output → receiver decider red
-    add_wire(wires, recv_arith_id, OUT_RED, recv_decider_id, RED)
-    # Receiver allowlist → receiver decider green
-    add_wire(wires, recv_cc_id, GREEN, recv_decider_id, GREEN)
-
-    # ─── Load inserters + chests (bottom = provider) ───
-    load_ids = []
-    for w in range(wagons):
-        wagon_x = (w + 1) * -7
-        for i in range(inserters_per_wagon):
-            x = wagon_x - i
-            chest_id = ids.next()
-            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": 2}))
-            ins_id = ids.next()
-            entities.append(Entity(
-                entity_number=ins_id,
-                name="bulk-inserter",
-                position={"x": x, "y": 1},
-                direction=NORTH,
-                control_behavior={"circuit_mode_of_operation": 1},
-            ))
-            load_ids.append(ins_id)
-
-    # ─── Unload inserters + chests (top = receiver) ───
-    unload_ids = []
-    for w in range(wagons):
-        wagon_x = (w + 1) * -7
-        for i in range(inserters_per_wagon):
-            x = wagon_x - i
-            chest_id = ids.next()
-            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": -2}))
-            ins_id = ids.next()
-            entities.append(Entity(
-                entity_number=ins_id,
-                name="bulk-inserter",
-                position={"x": x, "y": -1},
-                direction=NORTH,
-                control_behavior={"circuit_mode_of_operation": 1},
-            ))
-            unload_ids.append(ins_id)
-
-    for ins_id in load_ids:
-        add_wire(wires, prov_decider_id, OUT_GREEN, ins_id, GREEN)
-    for ins_id in unload_ids:
-        add_wire(wires, recv_decider_id, OUT_GREEN, ins_id, GREEN)
-
-    return build_blueprint(station_name, entities, wires, description=DUAL_DESC)
+    return build_blueprint(station_name, entities, wires)
 
 
 # ─── Output formatting ───────────────────────────────────────────────────────
@@ -649,11 +826,16 @@ def generate_output(sections: list[tuple[str, dict, str]], output_path: Optional
     lines = [
         "# LTN Station Blueprints",
         "",
-        "Generated by `factorio-blueprint-generator.py` for Factorio 2.0 + LTN",
+        "Generated by `factorio-blueprint-generator.py` for Factorio 2.0 + LTN.",
         "",
-        "**IMPORTANT:** After placing any blueprint, connect a red wire from the",
-        "LTN yellow combinator (auto-created output entity next to the stop) to",
-        "the appropriate combinator input. See each blueprint's description.",
+        "All LTN entities (stop, input lamp, output yellow CC) are included",
+        "in the blueprint — no manual post-placement wiring is required.",
+        "After placing, configure the **LTN Combinator** with desired items and",
+        "counts (positive = provide, negative = request), and set the",
+        "**Allowlist Constant Combinator** to limit which items are loaded/unloaded.",
+        "",
+        "Required mods: **LTN**, **LTN Combinator** (original, 2.0-compatible),",
+        "**Bob's Inserters** (for `bob-red-inserter` on south compact rows).",
         "",
         "---",
         "",
@@ -685,6 +867,8 @@ Examples:
   %(prog)s --all --output stations.md
 
   --all generates a blueprint book with provider/receiver/dual for 1, 2, and 3 wagons.
+  Layout: north roomy (chest+inserter rows) + south compact (interleaved row,
+  requires Bob's Inserters for 90-degree bob-red-inserter).
         """,
     )
 
@@ -693,7 +877,7 @@ Examples:
     mode.add_argument("--receiver", action="store_true", help="Generate receiver station")
     mode.add_argument("--dual", action="store_true", help="Generate dual-mode station")
     mode.add_argument("--all", action="store_true",
-                      help="Generate book with all types × 1/2/3 wagons")
+                      help="Generate book with provider/receiver/dual, 3 wagons each")
 
     items = parser.add_argument_group("Item lists")
     items.add_argument("--allowlist", nargs="+", metavar="ITEM",
@@ -704,12 +888,8 @@ Examples:
                        help="Items for dual-mode receiver allowlist")
 
     opts = parser.add_argument_group("Options")
-    opts.add_argument("--wagons", type=int, default=2,
-                      help="Cargo wagons per train (default: 2, ignored with --all)")
-    opts.add_argument("--inserters", type=int, default=6, dest="inserters_per_wagon",
-                      help="Inserters per wagon (default: 6)")
-    opts.add_argument("--load-from-top", action="store_true",
-                      help="Provider: load from top instead of bottom")
+    opts.add_argument("--wagons", type=int, default=3, choices=(3,),
+                      help="Cargo wagons per train: only 3 supported.")
     opts.add_argument("--station-name", type=str, default=None,
                       help="Custom station name")
     opts.add_argument("--config", type=str, metavar="FILE",
@@ -739,8 +919,6 @@ def main():
             bp = generate_provider(
                 allowlist=c.get("allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
-                inserters_per_wagon=c.get("inserters_per_wagon", 6),
-                load_from_top=c.get("load_from_top", False),
                 station_name=c.get("station_name", "LTN Provider"),
             )
             blueprints.append(bp)
@@ -750,7 +928,6 @@ def main():
             bp = generate_receiver(
                 allowlist=c.get("allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
-                inserters_per_wagon=c.get("inserters_per_wagon", 6),
                 station_name=c.get("station_name", "LTN Receiver"),
             )
             blueprints.append(bp)
@@ -761,7 +938,6 @@ def main():
                 provide_allowlist=c.get("provide_allowlist", default_allowlist),
                 request_allowlist=c.get("request_allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
-                inserters_per_wagon=c.get("inserters_per_wagon", 6),
                 station_name=c.get("station_name", "LTN Dual"),
             )
             blueprints.append(bp)
@@ -780,35 +956,18 @@ def main():
         verify_blueprint(bp_string, label)
         sections.append((label, book_or_bp, bp_string))
 
-    # ─── --all mode: book with all types × 1/2/3 wagons ───
+    # ─── --all mode: book with 3-wagon variants only ───
     elif args.all:
         allowlist = args.allowlist or default_allowlist
         provide = args.provide or allowlist
         request = args.request or allowlist
-        ipw = args.inserters_per_wagon
 
-        all_blueprints = []
-        for wagon_count in (1, 2, 3):
-            all_blueprints.append(generate_provider(
-                allowlist=allowlist,
-                wagons=wagon_count,
-                inserters_per_wagon=ipw,
-                load_from_top=args.load_from_top,
-                station_name=f"Provider ({wagon_count}W)",
-            ))
-            all_blueprints.append(generate_receiver(
-                allowlist=allowlist,
-                wagons=wagon_count,
-                inserters_per_wagon=ipw,
-                station_name=f"Receiver ({wagon_count}W)",
-            ))
-            all_blueprints.append(generate_dual(
-                provide_allowlist=provide,
-                request_allowlist=request,
-                wagons=wagon_count,
-                inserters_per_wagon=ipw,
-                station_name=f"Dual ({wagon_count}W)",
-            ))
+        all_blueprints = [
+            generate_provider(allowlist=allowlist, wagons=3, station_name="Provider (3W)"),
+            generate_receiver(allowlist=allowlist, wagons=3, station_name="Receiver (3W)"),
+            generate_dual(provide_allowlist=provide, request_allowlist=request,
+                          wagons=3, station_name="Dual (3W)"),
+        ]
 
         book = build_book("LTN Stations", all_blueprints)
         bp_string = encode_blueprint(book)
@@ -826,8 +985,6 @@ def main():
             bp = generate_provider(
                 allowlist=allowlist,
                 wagons=args.wagons,
-                inserters_per_wagon=args.inserters_per_wagon,
-                load_from_top=args.load_from_top,
                 station_name=name,
             )
             bp_string = encode_blueprint(bp)
@@ -840,7 +997,6 @@ def main():
             bp = generate_receiver(
                 allowlist=allowlist,
                 wagons=args.wagons,
-                inserters_per_wagon=args.inserters_per_wagon,
                 station_name=name,
             )
             bp_string = encode_blueprint(bp)
@@ -855,7 +1011,6 @@ def main():
                 provide_allowlist=provide,
                 request_allowlist=request,
                 wagons=args.wagons,
-                inserters_per_wagon=args.inserters_per_wagon,
                 station_name=name,
             )
             bp_string = encode_blueprint(bp)
