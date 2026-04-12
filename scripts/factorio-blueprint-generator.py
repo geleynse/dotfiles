@@ -1,15 +1,49 @@
 #!/usr/bin/env python3
 """
-Factorio LTN Blueprint Generator
+Factorio 2.0 LTN Blueprint Generator
 
-Generates importable blueprint strings for LTN train stations with allowlist filtering.
-Supports 3 station types: provider, receiver, and dual-mode.
+Generates importable blueprint strings for LTN (Logistic Train Network) train
+stations with allowlist filtering and overload prevention. Outputs individual
+blueprints or a blueprint book with 1/2/3 wagon variants.
 
-Station alignment:
-  - Train approaches RIGHT to LEFT
-  - Unload inserters on TOP (train → chests)
-  - Load inserters on BOTTOM (chests → train)
-  - Provider-only can optionally load from TOP
+Required mods:
+  - LTN (Logistic Train Network)
+  - LTN Combinator (original, 2.0-compatible)
+
+For full design documentation see:
+  ~/Obsidian/vault/projects/factorio-ltn-blueprints.md  (in-game guide)
+  ~/Obsidian/vault/projects/factorio-ltn-generator.md   (script & format docs)
+
+LTN 3-entity stop architecture:
+  An LTN stop is THREE separate placeable entities, all included in blueprints:
+
+  1. logistic-train-stop         — the visible 2x2 stop (vanilla read-train works)
+  2. logistic-train-stop-input   — 1x1 lamp: feeds config INTO LTN (from circuit net)
+  3. logistic-train-stop-output  — 1x1 yellow constant combinator: LTN writes the
+                                   active delivery signal here (positive=load,
+                                   negative=unload). This is the delivery source.
+
+  The lamp and yellow CC sit overlapping the stop's footprint (LTN gives them
+  no collision). Each has its own circuit connections, which lets us cleanly
+  subtract train-contents from delivery for overload prevention.
+
+  The ltn-combinator (config) is wired GREEN → input lamp.
+
+Provider overload prevention circuit:
+  output yellow CC (red, delivery)  ──→ ┐
+  stop (red, train contents) → arith (×−1) → ┴→ decider RED input
+                                                 (combined: remaining = delivery − cargo)
+  allowlist CC (green) ──→ decider GREEN input
+
+  Decider (per-network): red Each > 0 AND green Each > 0 → output Each from red
+  Decider output (green) → load inserters (set-filters mode)
+
+  When remaining hits 0, signal vanishes → inserter filter clears → loading stops.
+
+Receiver circuit:
+  output yellow CC (red, negative request) → arith (×−1) → decider RED input
+  allowlist CC (green) → decider GREEN input
+  Decider (per-network: red Each > 0 AND green Each > 0) → unload inserters
 
 Usage:
   python factorio-blueprint-generator.py --provider --allowlist iron-plate copper-plate
@@ -17,30 +51,6 @@ Usage:
   python factorio-blueprint-generator.py --dual --provide iron-plate --request copper-ore
   python factorio-blueprint-generator.py --all --output stations.md
   python factorio-blueprint-generator.py --config my-stations.json --output out.md
-
-Config file format (JSON):
-  {
-    "provider": {
-      "allowlist": ["iron-plate", "copper-plate"],
-      "wagons": 2,
-      "inserters_per_wagon": 6,
-      "load_from_top": false,
-      "station_name": "Provider Iron+Copper"
-    },
-    "receiver": {
-      "allowlist": ["iron-ore", "copper-ore"],
-      "wagons": 2,
-      "inserters_per_wagon": 6,
-      "station_name": "Receiver Ores"
-    },
-    "dual": {
-      "provide_allowlist": ["iron-plate"],
-      "request_allowlist": ["copper-ore"],
-      "wagons": 2,
-      "inserters_per_wagon": 6,
-      "station_name": "Dual Iron/Copper"
-    }
-  }
 """
 
 import argparse
@@ -48,29 +58,48 @@ import base64
 import json
 import sys
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
-# ─── Factorio item signal mapping ───────────────────────────────────────────
-# Factorio 2.0 uses "item" type for most signals
+# ─── Factorio 2.0 constants ──────────────────────────────────────────────────
+
+# 16-direction system (N=0, E=4, S=8, W=12)
+NORTH = 0
+EAST = 4
+SOUTH = 8
+WEST = 12
+
+# Wire connector IDs (defines.wire_connector_id)
+RED = 1         # circuit_red / combinator_input_red
+GREEN = 2       # circuit_green / combinator_input_green
+OUT_RED = 3     # combinator_output_red
+OUT_GREEN = 4   # combinator_output_green
+
+# Blueprint version: 2.0.10.0
+FACTORIO_VERSION = 562949954076672
+
+
+# ─── Signal helpers ───────────────────────────────────────────────────────────
+
 def item_signal(name: str) -> dict:
-    """Create a Factorio signal reference for an item."""
     return {"type": "item", "name": name}
 
 
-# ─── Blueprint data structures ──────────────────────────────────────────────
+def virtual_signal(name: str) -> dict:
+    return {"type": "virtual", "name": name}
+
+
+# ─── Blueprint data structures ────────────────────────────────────────────────
 
 @dataclass
 class Entity:
-    """A single entity in the blueprint."""
     entity_number: int
     name: str
-    position: dict  # {"x": float, "y": float}
-    direction: int = 0  # 0=north, 2=east, 4=south, 6=west (Factorio directions * 2 in 2.0)
+    position: dict
+    direction: int = 0
     control_behavior: Optional[dict] = None
-    connections: Optional[dict] = None
-    station: Optional[str] = None  # for train-stop
+    station: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -82,694 +111,558 @@ class Entity:
             d["direction"] = self.direction
         if self.control_behavior:
             d["control_behavior"] = self.control_behavior
-        if self.connections:
-            d["connections"] = self.connections
         if self.station:
             d["station"] = self.station
         return d
 
 
-def encode_blueprint(blueprint_dict: dict) -> str:
-    """Encode a blueprint dict to a Factorio-importable string.
-
-    Format: '0' + base64(zlib_deflate(json))
-    The leading '0' is the version byte used by Factorio.
-    """
-    json_bytes = json.dumps(blueprint_dict, separators=(",", ":")).encode("utf-8")
-    compressed = zlib.compress(json_bytes, level=9)
-    b64 = base64.b64encode(compressed).decode("ascii")
-    return "0" + b64
-
-
-def decode_blueprint(bp_string: str) -> dict:
-    """Decode a Factorio blueprint string back to dict for verification."""
-    if not bp_string.startswith("0"):
-        raise ValueError("Blueprint string must start with '0' version byte")
-    b64_data = bp_string[1:]
-    compressed = base64.b64decode(b64_data)
-    json_bytes = zlib.decompress(compressed)
-    return json.loads(json_bytes)
-
-
-def verify_blueprint(bp_string: str, label: str) -> bool:
-    """Decode a blueprint string and verify it parses correctly."""
-    try:
-        data = decode_blueprint(bp_string)
-        if "blueprint" not in data:
-            print(f"  WARN: {label} — decoded but missing 'blueprint' key", file=sys.stderr)
-            return False
-        entities = data["blueprint"].get("entities", [])
-        print(f"  OK: {label} — {len(entities)} entities, decodes cleanly", file=sys.stderr)
-        return True
-    except Exception as e:
-        print(f"  FAIL: {label} — {e}", file=sys.stderr)
-        return False
-
-
-# ─── Entity ID counter ──────────────────────────────────────────────────────
-
 class IDCounter:
     def __init__(self, start=1):
         self._n = start
+
     def next(self) -> int:
         n = self._n
         self._n += 1
         return n
 
 
-# ─── Wire connection helpers ────────────────────────────────────────────────
-# Factorio 2.0 blueprint wire format:
-#   "wires": [[from_entity, from_connector, to_entity, to_connector, color], ...]
-# connector: 1 = input (left), 2 = output (right) for combinators; 1 for other entities
-# color: not used in the wires array; instead wires are in "connections" on each entity
-#
-# Actually, Factorio 2.0 uses a simpler format for blueprint wires.
-# The entity "connections" field maps circuit_id -> color -> [{entity_id, circuit_id}]
-#
-# circuit_id: 1 = default / input side, 2 = output side (for combinators)
+# ─── Wire helpers ─────────────────────────────────────────────────────────────
 
-def add_wire(entities: dict, from_id: int, from_circuit: int,
-             to_id: int, to_circuit: int, color: str):
-    """Add a wire connection between two entities.
+def add_wire(wires: list, a_id: int, a_conn: int, b_id: int, b_conn: int):
+    """Add a wire entry. Lower entity_number goes first (Factorio convention)."""
+    if a_id > b_id:
+        a_id, a_conn, b_id, b_conn = b_id, b_conn, a_id, a_conn
+    wires.append([a_id, a_conn, b_id, b_conn])
 
-    entities: dict mapping entity_number -> Entity object
-    color: "red" or "green"
-    circuit_id: 1 = input/default, 2 = output (combinators)
+
+# ─── Encoding / decoding ─────────────────────────────────────────────────────
+
+def encode_blueprint(bp_dict: dict) -> str:
+    """Encode blueprint dict → Factorio-importable string ('0' + base64(zlib(json)))."""
+    json_bytes = json.dumps(bp_dict, separators=(",", ":")).encode("utf-8")
+    return "0" + base64.b64encode(zlib.compress(json_bytes, level=9)).decode("ascii")
+
+
+def decode_blueprint(bp_string: str) -> dict:
+    if not bp_string.startswith("0"):
+        raise ValueError("Blueprint string must start with '0' version byte")
+    return json.loads(zlib.decompress(base64.b64decode(bp_string[1:])))
+
+
+def verify_blueprint(bp_string: str, label: str) -> bool:
+    try:
+        data = decode_blueprint(bp_string)
+        if "blueprint_book" in data:
+            bps = data["blueprint_book"].get("blueprints", [])
+            print(f"  OK: {label} — book with {len(bps)} blueprints", file=sys.stderr)
+        elif "blueprint" in data:
+            ents = len(data["blueprint"].get("entities", []))
+            wires = len(data["blueprint"].get("wires", []))
+            print(f"  OK: {label} — {ents} entities, {wires} wires", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"  FAIL: {label} — {e}", file=sys.stderr)
+        return False
+
+
+# ─── Shared entity builders ──────────────────────────────────────────────────
+
+def build_allowlist_cc(eid: int, position: dict, items: list[str]) -> Entity:
+    """Constant combinator with allowlist items (each = 1)."""
+    filters = [
+        {"signal": item_signal(name), "count": 1, "index": i + 1}
+        for i, name in enumerate(items)
+    ]
+    return Entity(
+        entity_number=eid,
+        name="constant-combinator",
+        position=position,
+        control_behavior={"filters": filters},
+    )
+
+
+def build_provider_decider(eid: int, position: dict) -> Entity:
+    """Decider for provider stations: per-network red Each > 0 AND green Each > 0.
+
+    Uses Factorio 2.0 per-network conditions to check BOTH:
+      - Red wire: remaining = delivery − train_contents > 0  (still items to load)
+      - Green wire: allowlist signal > 0  (item is permitted)
+    Output copies count from red wire only (the remaining amount).
+    When remaining hits 0, signal vanishes and inserter filter clears.
     """
-    for (eid, cid, other_eid, other_cid) in [
-        (from_id, from_circuit, to_id, to_circuit),
-        (to_id, to_circuit, from_id, from_circuit),
-    ]:
-        ent = entities[eid]
-        if ent.connections is None:
-            ent.connections = {}
-        cid_str = str(cid)
-        if cid_str not in ent.connections:
-            ent.connections[cid_str] = {}
-        if color not in ent.connections[cid_str]:
-            ent.connections[cid_str][color] = []
-        # Avoid duplicate connections
-        conn_entry = {"entity_id": other_eid, "circuit_id": other_cid}
-        if conn_entry not in ent.connections[cid_str][color]:
-            ent.connections[cid_str][color].append(conn_entry)
+    return Entity(
+        entity_number=eid,
+        name="decider-combinator",
+        position=position,
+        control_behavior={
+            "decider_conditions": {
+                "conditions": [
+                    {
+                        "first_signal": virtual_signal("signal-each"),
+                        "constant": 0,
+                        "comparator": ">",
+                        "first_signal_networks": {"red": True, "green": False},
+                    },
+                    {
+                        "first_signal": virtual_signal("signal-each"),
+                        "constant": 0,
+                        "comparator": ">",
+                        "first_signal_networks": {"red": False, "green": True},
+                    },
+                ],
+                "outputs": [{
+                    "signal": virtual_signal("signal-each"),
+                    "copy_count_from_input": True,
+                    "networks": {"red": True, "green": False},
+                }],
+            },
+        },
+    )
 
 
-# ─── Blueprint generators ──────────────────────────────────────────────────
+def build_receiver_decider(eid: int, position: dict) -> Entity:
+    """Decider for receiver stations: Each > 0, output Each with copy_count.
 
-def generate_provider_blueprint(
+    Simpler than provider — no quantity control needed. Just checks that the
+    combined signal (inverted delivery + allowlist) is positive.
+    """
+    return Entity(
+        entity_number=eid,
+        name="decider-combinator",
+        position=position,
+        control_behavior={
+            "decider_conditions": {
+                "conditions": [{
+                    "first_signal": virtual_signal("signal-each"),
+                    "constant": 0,
+                    "comparator": ">",
+                }],
+                "outputs": [{
+                    "signal": virtual_signal("signal-each"),
+                    "copy_count_from_input": True,
+                }],
+            },
+        },
+    )
+
+
+def build_inverter(eid: int, position: dict) -> Entity:
+    """Arithmetic combinator: Each * -1."""
+    return Entity(
+        entity_number=eid,
+        name="arithmetic-combinator",
+        position=position,
+        control_behavior={
+            "arithmetic_conditions": {
+                "first_signal": virtual_signal("signal-each"),
+                "second_constant": -1,
+                "operation": "*",
+                "output_signal": virtual_signal("signal-each"),
+            },
+        },
+    )
+
+
+def build_blueprint(label: str, entities: list["Entity"], wires: list,
+                    description: str = "") -> dict:
+    bp = {
+        "blueprint": {
+            "item": "blueprint",
+            "label": label,
+            "entities": [e.to_dict() for e in entities],
+            "version": FACTORIO_VERSION,
+        }
+    }
+    if wires:
+        bp["blueprint"]["wires"] = wires
+    if description:
+        bp["blueprint"]["description"] = description
+    return bp
+
+
+def build_book(label: str, blueprints: list[dict]) -> dict:
+    """Wrap blueprint dicts into a blueprint book."""
+    entries = []
+    for i, bp in enumerate(blueprints):
+        entry = {"index": i}
+        if "blueprint" in bp:
+            entry["blueprint"] = bp["blueprint"]
+        elif "blueprint_book" in bp:
+            entry["blueprint_book"] = bp["blueprint_book"]
+        entries.append(entry)
+    return {
+        "blueprint_book": {
+            "item": "blueprint-book",
+            "label": label,
+            "blueprints": entries,
+            "active_index": 0,
+            "version": FACTORIO_VERSION,
+        }
+    }
+
+
+# ─── Station generators ──────────────────────────────────────────────────────
+
+PROVIDER_DESC = (
+    "AFTER PLACING: Connect ONE red wire from the LTN yellow combinator "
+    "(auto-created output entity next to stop) to the decider combinator's "
+    "red input. This provides the delivery signal for overload prevention. "
+    "The stop reads train contents; the arithmetic inverts them; the decider "
+    "computes remaining = delivery - cargo and filters through the allowlist."
+)
+
+RECEIVER_DESC = (
+    "AFTER PLACING: Connect ONE red wire from the LTN yellow combinator "
+    "(auto-created output entity next to stop) to the arithmetic combinator's "
+    "red input. This provides the delivery signal. The arithmetic inverts "
+    "negative request signals to positive; the decider filters through the "
+    "allowlist. Extra unloading beyond the exact request amount is acceptable."
+)
+
+DUAL_DESC = (
+    "AFTER PLACING: Connect TWO red wires from the LTN yellow combinator "
+    "(auto-created output entity next to stop): one to the provider decider's "
+    "red input (overload prevention), one to the receiver arithmetic's red "
+    "input (delivery inversion). See vault docs for full signal flow."
+)
+
+
+def generate_provider(
     allowlist: list[str],
     wagons: int = 2,
     inserters_per_wagon: int = 6,
     load_from_top: bool = False,
     station_name: str = "LTN Provider",
-) -> tuple[dict, str]:
-    """Generate a provider station blueprint.
+) -> dict:
+    """Generate a provider station blueprint with overload prevention.
 
-    Returns (blueprint_dict, annotation_json_str).
+    Signal flow:
+      Yellow combinator (delivery, red) ──→ ┐
+                                             ├→ decider input red = remaining
+      Stop (read train, red) → arith (×-1, red out) ──→ ┘
+
+      Allowlist CC (green) ──→ decider input green
+
+      Decider: red Each > 0 AND green Each > 0
+               output: Each, count from red (remaining amount)
+      Decider output (green) → inserters (set-filters)
+
+    When remaining hits 0, signal vanishes → inserter filter clears → stops loading.
+    The yellow combinator wire must be connected manually after placement.
     """
     ids = IDCounter()
-    ent_map: dict[int, Entity] = {}
+    entities: list[Entity] = []
+    wires: list = []
 
-    # ─── Train stop ───
+    # ─── Logistic train stop (read stopped train enabled) ───
     stop_id = ids.next()
-    stop = Entity(
+    entities.append(Entity(
         entity_number=stop_id,
-        name="train-stop",
+        name="logistic-train-stop",
         position={"x": 0, "y": 0},
-        direction=6,  # west — train approaches from east (right to left)
+        direction=WEST,
         station=station_name,
-    )
-    ent_map[stop_id] = stop
+        control_behavior={"read_stopped_train": True},
+    ))
 
-    # ─── LTN Combinator ───
+    # ─── LTN Combinator (input-only, auto-links to lamp) ───
     ltn_id = ids.next()
-    # LTN combinator placed near station
-    # NOTE: The actual LTN combinator entity name depends on mod version.
-    # "ltn-combinator" for LTN Combinator Modernized
-    ltn = Entity(
+    entities.append(Entity(
         entity_number=ltn_id,
         name="ltn-combinator",
         position={"x": 2, "y": 2},
-    )
-    ent_map[ltn_id] = ltn
+    ))
 
-    # ─── Constant Combinator (Allowlist) ───
-    allowlist_id = ids.next()
-    # Build the filter signals: each allowed item = 1
-    filters = []
-    for i, item_name in enumerate(allowlist):
-        filters.append({
-            "signal": item_signal(item_name),
-            "count": 1,
-            "index": i + 1,
-        })
+    # ─── Arithmetic combinator (invert train contents: Each × -1) ───
+    arith_id = ids.next()
+    entities.append(build_inverter(arith_id, {"x": 4, "y": 2}))
 
-    allowlist_cb = Entity(
-        entity_number=allowlist_id,
-        name="constant-combinator",
-        position={"x": 4, "y": 2},
-        control_behavior={
-            "filters": filters,
-            # Comment: "Allowlist — each item set to 1. Only these items will be
-            # loaded onto trains. Edit this combinator to change the allowlist."
-        },
-    )
-    ent_map[allowlist_id] = allowlist_cb
+    # ─── Allowlist constant combinator ───
+    cc_id = ids.next()
+    entities.append(build_allowlist_cc(cc_id, {"x": 6, "y": 2}, allowlist))
 
-    # ─── Decider Combinator (Filter) ───
+    # ─── Decider combinator (per-network: red > 0 AND green > 0) ───
     decider_id = ids.next()
-    decider = Entity(
-        entity_number=decider_id,
-        name="decider-combinator",
-        position={"x": 6, "y": 2},
-        control_behavior={
-            "decider_conditions": {
-                "conditions": [
-                    {
-                        "first_signal": {"type": "virtual", "name": "signal-each"},
-                        "constant": 0,
-                        "comparator": ">",
-                        # Check green wire (allowlist) > 0
-                    }
-                ],
-                "outputs": [
-                    {
-                        "signal": {"type": "virtual", "name": "signal-each"},
-                        "copy_count_from_input": True,
-                    }
-                ],
-            },
-            # Comment: "Filter — only passes signals where the allowlist has a
-            # positive value. Output goes to load inserters."
-        },
-    )
-    ent_map[decider_id] = decider
+    entities.append(build_provider_decider(decider_id, {"x": 8, "y": 2}))
 
-    # ─── Wiring: LTN → Decider (red), Allowlist → Decider (green) ───
-    # LTN output → Decider input (red wire)
-    add_wire(ent_map, ltn_id, 1, decider_id, 1, "red")
-    # Allowlist → Decider input (green wire)
-    add_wire(ent_map, allowlist_id, 1, decider_id, 1, "green")
+    # ─── Wiring ───
+    # Stop (train contents, red) → arithmetic input
+    add_wire(wires, stop_id, RED, arith_id, RED)
+    # Arithmetic output (inverted train contents, red) → decider input red
+    # This combines on the decider's red input with the yellow combinator wire
+    # (which the user connects manually after placement)
+    add_wire(wires, arith_id, OUT_RED, decider_id, RED)
+    # Allowlist CC (green) → decider input green
+    add_wire(wires, cc_id, GREEN, decider_id, GREEN)
 
-    # ─── Chests and Inserters per wagon ───
+    # ─── Chests + load inserters per wagon ───
     inserter_ids = []
     for w in range(wagons):
-        wagon_x_base = -2 + (w * 7 * -1)  # wagons extend to the right (east)
-        # Actually, train goes right-to-left, so wagons are to the right of the stop
-        wagon_x_base = (w + 1) * -7  # each wagon is 7 tiles wide
-
+        wagon_x = (w + 1) * -7
         for i in range(inserters_per_wagon):
-            x = wagon_x_base - i
-            # Load inserters: bottom side by default, top side if load_from_top
+            x = wagon_x - i
+
             if load_from_top:
-                ins_y = -1  # top side of track
-                chest_y = -2
-                ins_direction = 4  # south — grab from chest above, place into train
+                chest_y, ins_y, ins_dir = -2, -1, SOUTH
             else:
-                ins_y = 1  # bottom side of track
-                chest_y = 2
-                ins_direction = 0  # north — grab from chest below, place into train
+                chest_y, ins_y, ins_dir = 2, 1, NORTH
 
-            # Chest
             chest_id = ids.next()
-            chest = Entity(
-                entity_number=chest_id,
-                name="steel-chest",
-                position={"x": x, "y": chest_y},
-            )
-            ent_map[chest_id] = chest
+            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": chest_y}))
 
-            # Inserter (stack filter inserter for throughput)
             ins_id = ids.next()
-            inserter = Entity(
+            entities.append(Entity(
                 entity_number=ins_id,
                 name="bulk-inserter",
                 position={"x": x, "y": ins_y},
-                direction=ins_direction,
-                control_behavior={
-                    "circuit_mode_of_operation": 1,  # Set filters
-                    # Comment: "Set filters mode — inserter only grabs items whose
-                    # signal name appears on the connected green wire."
-                },
-            )
-            ent_map[ins_id] = inserter
+                direction=ins_dir,
+                control_behavior={"circuit_mode_of_operation": 1},
+            ))
             inserter_ids.append(ins_id)
 
-    # ─── Wire: Decider output → all inserters (green wire) ───
+    # Decider output → all inserters (green)
     for ins_id in inserter_ids:
-        add_wire(ent_map, decider_id, 2, ins_id, 1, "green")
+        add_wire(wires, decider_id, OUT_GREEN, ins_id, GREEN)
 
-    # ─── Build blueprint ───
-    entities_list = [e.to_dict() for e in ent_map.values()]
-    bp = {
-        "blueprint": {
-            "item": "blueprint",
-            "label": station_name,
-            "entities": entities_list,
-            "version": 562949954076672,  # Factorio 2.0
-        }
-    }
-
-    # Build annotated JSON
-    annotated = json.dumps(bp, indent=2)
-
-    return bp, annotated
+    return build_blueprint(station_name, entities, wires, description=PROVIDER_DESC)
 
 
-def generate_receiver_blueprint(
+def generate_receiver(
     allowlist: list[str],
     wagons: int = 2,
     inserters_per_wagon: int = 6,
     station_name: str = "LTN Receiver",
-) -> tuple[dict, str]:
+) -> dict:
     """Generate a receiver station blueprint.
 
-    Includes an arithmetic combinator to invert negative request signals.
+    Signal flow:
+      Yellow combinator (delivery, red) → arithmetic (×-1) → decider input red
+      Allowlist CC (green) → decider input green
+      Decider (Each > 0, copy count) output (green) → inserters (set-filters)
+
+    No quantity control — inserters unload all matching items. Extra unloading
+    is acceptable per design. The yellow combinator wire must be connected
+    manually after placement.
     """
     ids = IDCounter()
-    ent_map: dict[int, Entity] = {}
+    entities: list[Entity] = []
+    wires: list = []
 
-    # ─── Train stop ───
     stop_id = ids.next()
-    stop = Entity(
+    entities.append(Entity(
         entity_number=stop_id,
-        name="train-stop",
+        name="logistic-train-stop",
         position={"x": 0, "y": 0},
-        direction=6,
+        direction=WEST,
         station=station_name,
-    )
-    ent_map[stop_id] = stop
+    ))
 
-    # ─── LTN Combinator ───
     ltn_id = ids.next()
-    ltn = Entity(
+    entities.append(Entity(
         entity_number=ltn_id,
         name="ltn-combinator",
         position={"x": 2, "y": 2},
-    )
-    ent_map[ltn_id] = ltn
+    ))
 
-    # ─── Arithmetic Combinator (Inverter: Each * -1) ───
+    # Arithmetic: invert delivery signals (negative → positive for set-filters)
     arith_id = ids.next()
-    arith = Entity(
-        entity_number=arith_id,
-        name="arithmetic-combinator",
-        position={"x": 4, "y": 2},
-        control_behavior={
-            "arithmetic_conditions": {
-                "first_signal": {"type": "virtual", "name": "signal-each"},
-                "second_constant": -1,
-                "operation": "*",
-                "output_signal": {"type": "virtual", "name": "signal-each"},
-            },
-            # Comment: "Inverter — flips negative LTN request signals to positive
-            # so inserter 'Set filters' mode can use them."
-        },
-    )
-    ent_map[arith_id] = arith
+    entities.append(build_inverter(arith_id, {"x": 4, "y": 2}))
 
-    # ─── Constant Combinator (Allowlist) ───
-    allowlist_id = ids.next()
-    filters = []
-    for i, item_name in enumerate(allowlist):
-        filters.append({
-            "signal": item_signal(item_name),
-            "count": 1,
-            "index": i + 1,
-        })
-    allowlist_cb = Entity(
-        entity_number=allowlist_id,
-        name="constant-combinator",
-        position={"x": 6, "y": 2},
-        control_behavior={
-            "filters": filters,
-        },
-    )
-    ent_map[allowlist_id] = allowlist_cb
+    cc_id = ids.next()
+    entities.append(build_allowlist_cc(cc_id, {"x": 6, "y": 2}, allowlist))
 
-    # ─── Decider Combinator (Filter) ───
     decider_id = ids.next()
-    decider = Entity(
-        entity_number=decider_id,
-        name="decider-combinator",
-        position={"x": 8, "y": 2},
-        control_behavior={
-            "decider_conditions": {
-                "conditions": [
-                    {
-                        "first_signal": {"type": "virtual", "name": "signal-each"},
-                        "constant": 0,
-                        "comparator": ">",
-                    }
-                ],
-                "outputs": [
-                    {
-                        "signal": {"type": "virtual", "name": "signal-each"},
-                        "copy_count_from_input": True,
-                    }
-                ],
-            },
-        },
-    )
-    ent_map[decider_id] = decider
+    entities.append(build_receiver_decider(decider_id, {"x": 8, "y": 2}))
 
-    # ─── Wiring ───
-    # LTN → Arithmetic (red)
-    add_wire(ent_map, ltn_id, 1, arith_id, 1, "red")
-    # Arithmetic output → Decider input (red)
-    add_wire(ent_map, arith_id, 2, decider_id, 1, "red")
-    # Allowlist → Decider input (green)
-    add_wire(ent_map, allowlist_id, 1, decider_id, 1, "green")
+    # Yellow combinator wire is manual — arith input is the connection point.
+    # Arith output (inverted, red) → decider input red
+    add_wire(wires, arith_id, OUT_RED, decider_id, RED)
+    # Allowlist CC (green) → decider input green
+    add_wire(wires, cc_id, GREEN, decider_id, GREEN)
 
-    # ─── Chests and Unload Inserters (top side) ───
+    # Unload inserters + chests (top side)
     inserter_ids = []
     for w in range(wagons):
-        wagon_x_base = (w + 1) * -7
-
+        wagon_x = (w + 1) * -7
         for i in range(inserters_per_wagon):
-            x = wagon_x_base - i
+            x = wagon_x - i
 
-            # Chest on top
             chest_id = ids.next()
-            chest = Entity(
-                entity_number=chest_id,
-                name="steel-chest",
-                position={"x": x, "y": -2},
-            )
-            ent_map[chest_id] = chest
+            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": -2}))
 
-            # Unload inserter (top side, grabs from train, places into chest)
             ins_id = ids.next()
-            inserter = Entity(
+            entities.append(Entity(
                 entity_number=ins_id,
                 name="bulk-inserter",
                 position={"x": x, "y": -1},
-                direction=0,  # north — facing up, grabs from train (south), places in chest (north)
-                control_behavior={
-                    "circuit_mode_of_operation": 1,  # Set filters
-                },
-            )
-            ent_map[ins_id] = inserter
+                direction=NORTH,
+                control_behavior={"circuit_mode_of_operation": 1},
+            ))
             inserter_ids.append(ins_id)
 
-    # ─── Wire: Decider output → all inserters (green) ───
     for ins_id in inserter_ids:
-        add_wire(ent_map, decider_id, 2, ins_id, 1, "green")
+        add_wire(wires, decider_id, OUT_GREEN, ins_id, GREEN)
 
-    entities_list = [e.to_dict() for e in ent_map.values()]
-    bp = {
-        "blueprint": {
-            "item": "blueprint",
-            "label": station_name,
-            "entities": entities_list,
-            "version": 562949954076672,
-        }
-    }
-    annotated = json.dumps(bp, indent=2)
-    return bp, annotated
+    return build_blueprint(station_name, entities, wires, description=RECEIVER_DESC)
 
 
-def generate_dual_blueprint(
+def generate_dual(
     provide_allowlist: list[str],
     request_allowlist: list[str],
     wagons: int = 2,
     inserters_per_wagon: int = 6,
     station_name: str = "LTN Dual",
-) -> tuple[dict, str]:
-    """Generate a dual-mode station blueprint (provider + receiver).
+) -> dict:
+    """Generate a dual-mode station (provider + receiver).
 
-    Two separate filtering paths:
-    - Provider path: LTN → Decider #1 (with provider allowlist) → load inserters (bottom)
-    - Receiver path: LTN → Arithmetic → Decider #2 (with receiver allowlist) → unload inserters (top)
+    Provider path (bottom inserters — load items onto train):
+      Yellow combinator (red) + stop read-train → arith (×-1) → remaining on red
+      → provider decider (per-network) + provider CC (green) → load inserters
+
+    Receiver path (top inserters — unload items from train):
+      Yellow combinator (red) → arith #2 (×-1) → decider + receiver CC → unload inserters
+
+    Two manual red wires from yellow combinator needed after placement.
     """
     ids = IDCounter()
-    ent_map: dict[int, Entity] = {}
+    entities: list[Entity] = []
+    wires: list = []
 
-    # ─── Train stop ───
     stop_id = ids.next()
-    stop = Entity(
+    entities.append(Entity(
         entity_number=stop_id,
-        name="train-stop",
+        name="logistic-train-stop",
         position={"x": 0, "y": 0},
-        direction=6,
+        direction=WEST,
         station=station_name,
-    )
-    ent_map[stop_id] = stop
+        control_behavior={"read_stopped_train": True},
+    ))
 
-    # ─── LTN Combinator ───
     ltn_id = ids.next()
-    ltn = Entity(
+    entities.append(Entity(
         entity_number=ltn_id,
         name="ltn-combinator",
         position={"x": 2, "y": 3},
-    )
-    ent_map[ltn_id] = ltn
+    ))
 
-    # ═══ PROVIDER PATH ═══
+    # ═══ PROVIDER PATH (bottom — load onto train) ═══
 
-    # ─── Provider Allowlist (Constant Combinator #1) ───
-    prov_allowlist_id = ids.next()
-    prov_filters = []
-    for i, item_name in enumerate(provide_allowlist):
-        prov_filters.append({
-            "signal": item_signal(item_name),
-            "count": 1,
-            "index": i + 1,
-        })
-    prov_allowlist = Entity(
-        entity_number=prov_allowlist_id,
-        name="constant-combinator",
-        position={"x": 4, "y": 3},
-        control_behavior={"filters": prov_filters},
-    )
-    ent_map[prov_allowlist_id] = prov_allowlist
+    # Arithmetic: invert train contents for subtraction
+    prov_arith_id = ids.next()
+    entities.append(build_inverter(prov_arith_id, {"x": 4, "y": 3}))
 
-    # ─── Provider Decider (#1) ───
+    prov_cc_id = ids.next()
+    entities.append(build_allowlist_cc(prov_cc_id, {"x": 6, "y": 3}, provide_allowlist))
+
     prov_decider_id = ids.next()
-    prov_decider = Entity(
-        entity_number=prov_decider_id,
-        name="decider-combinator",
-        position={"x": 6, "y": 3},
-        control_behavior={
-            "decider_conditions": {
-                "conditions": [
-                    {
-                        "first_signal": {"type": "virtual", "name": "signal-each"},
-                        "constant": 0,
-                        "comparator": ">",
-                    }
-                ],
-                "outputs": [
-                    {
-                        "signal": {"type": "virtual", "name": "signal-each"},
-                        "copy_count_from_input": True,
-                    }
-                ],
-            },
-        },
-    )
-    ent_map[prov_decider_id] = prov_decider
+    entities.append(build_provider_decider(prov_decider_id, {"x": 8, "y": 3}))
 
-    # Provider wiring
-    add_wire(ent_map, ltn_id, 1, prov_decider_id, 1, "red")
-    add_wire(ent_map, prov_allowlist_id, 1, prov_decider_id, 1, "green")
+    # Stop (train contents) → provider arithmetic
+    add_wire(wires, stop_id, RED, prov_arith_id, RED)
+    # Provider arithmetic output → provider decider red input
+    add_wire(wires, prov_arith_id, OUT_RED, prov_decider_id, RED)
+    # Provider allowlist → provider decider green input
+    add_wire(wires, prov_cc_id, GREEN, prov_decider_id, GREEN)
 
-    # ═══ RECEIVER PATH ═══
+    # ═══ RECEIVER PATH (top — unload from train) ═══
 
-    # ─── Arithmetic Combinator (Inverter) ───
-    arith_id = ids.next()
-    arith = Entity(
-        entity_number=arith_id,
-        name="arithmetic-combinator",
-        position={"x": 2, "y": 5},
-        control_behavior={
-            "arithmetic_conditions": {
-                "first_signal": {"type": "virtual", "name": "signal-each"},
-                "second_constant": -1,
-                "operation": "*",
-                "output_signal": {"type": "virtual", "name": "signal-each"},
-            },
-        },
-    )
-    ent_map[arith_id] = arith
+    # Arithmetic: invert delivery signals (negative → positive)
+    recv_arith_id = ids.next()
+    entities.append(build_inverter(recv_arith_id, {"x": 4, "y": 5}))
 
-    # ─── Receiver Allowlist (Constant Combinator #2) ───
-    recv_allowlist_id = ids.next()
-    recv_filters = []
-    for i, item_name in enumerate(request_allowlist):
-        recv_filters.append({
-            "signal": item_signal(item_name),
-            "count": 1,
-            "index": i + 1,
-        })
-    recv_allowlist = Entity(
-        entity_number=recv_allowlist_id,
-        name="constant-combinator",
-        position={"x": 4, "y": 5},
-        control_behavior={"filters": recv_filters},
-    )
-    ent_map[recv_allowlist_id] = recv_allowlist
+    recv_cc_id = ids.next()
+    entities.append(build_allowlist_cc(recv_cc_id, {"x": 6, "y": 5}, request_allowlist))
 
-    # ─── Receiver Decider (#2) ───
     recv_decider_id = ids.next()
-    recv_decider = Entity(
-        entity_number=recv_decider_id,
-        name="decider-combinator",
-        position={"x": 6, "y": 5},
-        control_behavior={
-            "decider_conditions": {
-                "conditions": [
-                    {
-                        "first_signal": {"type": "virtual", "name": "signal-each"},
-                        "constant": 0,
-                        "comparator": ">",
-                    }
-                ],
-                "outputs": [
-                    {
-                        "signal": {"type": "virtual", "name": "signal-each"},
-                        "copy_count_from_input": True,
-                    }
-                ],
-            },
-        },
-    )
-    ent_map[recv_decider_id] = recv_decider
+    entities.append(build_receiver_decider(recv_decider_id, {"x": 8, "y": 5}))
 
-    # Receiver wiring
-    add_wire(ent_map, ltn_id, 1, arith_id, 1, "red")
-    add_wire(ent_map, arith_id, 2, recv_decider_id, 1, "red")
-    add_wire(ent_map, recv_allowlist_id, 1, recv_decider_id, 1, "green")
+    # Yellow combinator wire to recv_arith is manual
+    # Receiver arithmetic output → receiver decider red
+    add_wire(wires, recv_arith_id, OUT_RED, recv_decider_id, RED)
+    # Receiver allowlist → receiver decider green
+    add_wire(wires, recv_cc_id, GREEN, recv_decider_id, GREEN)
 
-    # ─── Load Inserters + Chests (bottom = provider) ───
-    load_inserter_ids = []
+    # ─── Load inserters + chests (bottom = provider) ───
+    load_ids = []
     for w in range(wagons):
-        wagon_x_base = (w + 1) * -7
+        wagon_x = (w + 1) * -7
         for i in range(inserters_per_wagon):
-            x = wagon_x_base - i
-
-            # Provider chest (bottom)
+            x = wagon_x - i
             chest_id = ids.next()
-            chest = Entity(
-                entity_number=chest_id,
-                name="steel-chest",
-                position={"x": x, "y": 2},
-            )
-            ent_map[chest_id] = chest
-
-            # Load inserter (bottom, grabs from chest, places into train)
+            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": 2}))
             ins_id = ids.next()
-            inserter = Entity(
+            entities.append(Entity(
                 entity_number=ins_id,
                 name="bulk-inserter",
                 position={"x": x, "y": 1},
-                direction=0,  # north — grab from south (chest), place north (train)
-                control_behavior={
-                    "circuit_mode_of_operation": 1,
-                },
-            )
-            ent_map[ins_id] = inserter
-            load_inserter_ids.append(ins_id)
+                direction=NORTH,
+                control_behavior={"circuit_mode_of_operation": 1},
+            ))
+            load_ids.append(ins_id)
 
-    # ─── Unload Inserters + Chests (top = receiver) ───
-    unload_inserter_ids = []
+    # ─── Unload inserters + chests (top = receiver) ───
+    unload_ids = []
     for w in range(wagons):
-        wagon_x_base = (w + 1) * -7
+        wagon_x = (w + 1) * -7
         for i in range(inserters_per_wagon):
-            x = wagon_x_base - i
-
-            # Receiver chest (top)
+            x = wagon_x - i
             chest_id = ids.next()
-            chest = Entity(
-                entity_number=chest_id,
-                name="steel-chest",
-                position={"x": x, "y": -2},
-            )
-            ent_map[chest_id] = chest
-
-            # Unload inserter (top, grabs from train, places into chest)
+            entities.append(Entity(chest_id, "steel-chest", {"x": x, "y": -2}))
             ins_id = ids.next()
-            inserter = Entity(
+            entities.append(Entity(
                 entity_number=ins_id,
                 name="bulk-inserter",
                 position={"x": x, "y": -1},
-                direction=0,  # north — grab from south (train), place north (chest)
-                control_behavior={
-                    "circuit_mode_of_operation": 1,
-                },
-            )
-            ent_map[ins_id] = inserter
-            unload_inserter_ids.append(ins_id)
+                direction=NORTH,
+                control_behavior={"circuit_mode_of_operation": 1},
+            ))
+            unload_ids.append(ins_id)
 
-    # ─── Wire: Provider Decider output → load inserters (green) ───
-    for ins_id in load_inserter_ids:
-        add_wire(ent_map, prov_decider_id, 2, ins_id, 1, "green")
+    for ins_id in load_ids:
+        add_wire(wires, prov_decider_id, OUT_GREEN, ins_id, GREEN)
+    for ins_id in unload_ids:
+        add_wire(wires, recv_decider_id, OUT_GREEN, ins_id, GREEN)
 
-    # ─── Wire: Receiver Decider output → unload inserters (green) ───
-    for ins_id in unload_inserter_ids:
-        add_wire(ent_map, recv_decider_id, 2, ins_id, 1, "green")
-
-    entities_list = [e.to_dict() for e in ent_map.values()]
-    bp = {
-        "blueprint": {
-            "item": "blueprint",
-            "label": station_name,
-            "entities": entities_list,
-            "version": 562949954076672,
-        }
-    }
-    annotated = json.dumps(bp, indent=2)
-    return bp, annotated
+    return build_blueprint(station_name, entities, wires, description=DUAL_DESC)
 
 
-# ─── Output formatting ──────────────────────────────────────────────────────
+# ─── Output formatting ───────────────────────────────────────────────────────
 
-def format_blueprint_section(
-    title: str,
-    bp_dict: dict,
-    bp_string: str,
-    annotated_json: str,
-) -> str:
-    """Format a single blueprint as a markdown section."""
-    lines = [
-        f"## {title}",
-        "",
-        f"**Station name:** {bp_dict['blueprint']['label']}",
-        f"**Entities:** {len(bp_dict['blueprint']['entities'])}",
-        "",
-        "### Blueprint String (paste into Factorio)",
-        "",
-        "```",
-        bp_string,
-        "```",
-        "",
-        "### Uncompressed JSON (for reference/editing)",
-        "",
-        "```json",
-        annotated_json,
-        "```",
-        "",
-    ]
-    return "\n".join(lines)
+def format_section(title: str, bp_dict: dict, bp_string: str) -> str:
+    if "blueprint" in bp_dict:
+        ent_count = len(bp_dict["blueprint"].get("entities", []))
+        wire_count = len(bp_dict["blueprint"].get("wires", []))
+        meta = f"**Entities:** {ent_count} | **Wires:** {wire_count}"
+    else:
+        bp_count = len(bp_dict["blueprint_book"].get("blueprints", []))
+        meta = f"**Blueprints:** {bp_count}"
+
+    return "\n".join([
+        f"## {title}", "",
+        meta, "",
+        "### Blueprint String (paste into Factorio)", "",
+        "```", bp_string, "```", "",
+    ])
 
 
-def generate_output(sections: list[tuple[str, dict, str, str]], output_path: Optional[str] = None):
-    """Generate final markdown output with all blueprint sections."""
+def generate_output(sections: list[tuple[str, dict, str]], output_path: Optional[str] = None):
     lines = [
         "# LTN Station Blueprints",
         "",
-        f"Generated by `factorio-blueprint-generator.py`",
+        "Generated by `factorio-blueprint-generator.py` for Factorio 2.0 + LTN",
+        "",
+        "**IMPORTANT:** After placing any blueprint, connect a red wire from the",
+        "LTN yellow combinator (auto-created output entity next to the stop) to",
+        "the appropriate combinator input. See each blueprint's description.",
         "",
         "---",
         "",
     ]
-
-    for title, bp_dict, bp_string, annotated in sections:
-        lines.append(format_blueprint_section(title, bp_dict, bp_string, annotated))
+    for title, bp_dict, bp_string in sections:
+        lines.append(format_section(title, bp_dict, bp_string))
         lines.append("---\n")
 
     content = "\n".join(lines)
-
     if output_path:
         with open(output_path, "w") as f:
             f.write(content)
@@ -778,45 +671,41 @@ def generate_output(sections: list[tuple[str, dict, str, str]], output_path: Opt
         print(content)
 
 
-# ─── CLI ─────────────────────────────────────────────────────────────────────
+# ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate Factorio LTN station blueprints with allowlist filtering.",
+        description="Generate Factorio 2.0 LTN station blueprints with allowlist filtering.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s --provider --allowlist iron-plate copper-plate
-  %(prog)s --receiver --allowlist iron-ore copper-ore --wagons 4
+  %(prog)s --receiver --allowlist iron-ore copper-ore --wagons 2
   %(prog)s --dual --provide iron-plate --request copper-ore
   %(prog)s --all --output stations.md
-  %(prog)s --config stations.json --output out.md
 
-Config file format (JSON):
-  {
-    "provider": {"allowlist": ["iron-plate"], "wagons": 2, "station_name": "My Provider"},
-    "receiver": {"allowlist": ["iron-ore"], "wagons": 2},
-    "dual": {"provide_allowlist": ["iron-plate"], "request_allowlist": ["copper-ore"]}
-  }
+  --all generates a blueprint book with provider/receiver/dual for 1, 2, and 3 wagons.
         """,
     )
 
-    mode = parser.add_argument_group("Station type (pick one or more)")
+    mode = parser.add_argument_group("Station type")
     mode.add_argument("--provider", action="store_true", help="Generate provider station")
     mode.add_argument("--receiver", action="store_true", help="Generate receiver station")
     mode.add_argument("--dual", action="store_true", help="Generate dual-mode station")
-    mode.add_argument("--all", action="store_true", help="Generate all 3 station types")
+    mode.add_argument("--all", action="store_true",
+                      help="Generate book with all types × 1/2/3 wagons")
 
-    items = parser.add_argument_group("Item lists (for CLI mode)")
+    items = parser.add_argument_group("Item lists")
     items.add_argument("--allowlist", nargs="+", metavar="ITEM",
-                       help="Items for provider/receiver allowlist (e.g., iron-plate copper-plate)")
+                       help="Items for provider/receiver (e.g., iron-plate copper-plate)")
     items.add_argument("--provide", nargs="+", metavar="ITEM",
                        help="Items for dual-mode provider allowlist")
     items.add_argument("--request", nargs="+", metavar="ITEM",
                        help="Items for dual-mode receiver allowlist")
 
     opts = parser.add_argument_group("Options")
-    opts.add_argument("--wagons", type=int, default=2, help="Number of cargo wagons (default: 2)")
+    opts.add_argument("--wagons", type=int, default=2,
+                      help="Cargo wagons per train (default: 2, ignored with --all)")
     opts.add_argument("--inserters", type=int, default=6, dest="inserters_per_wagon",
                       help="Inserters per wagon (default: 6)")
     opts.add_argument("--load-from-top", action="store_true",
@@ -835,101 +724,146 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    sections: list[tuple[str, dict, str, str]] = []
     default_allowlist = ["iron-plate", "copper-plate"]
+    sections: list[tuple[str, dict, str]] = []
 
     # ─── Config file mode ───
     if args.config:
         with open(args.config) as f:
             config = json.load(f)
 
+        blueprints = []
+
         if "provider" in config:
             c = config["provider"]
-            bp, annotated = generate_provider_blueprint(
+            bp = generate_provider(
                 allowlist=c.get("allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
                 inserters_per_wagon=c.get("inserters_per_wagon", 6),
                 load_from_top=c.get("load_from_top", False),
                 station_name=c.get("station_name", "LTN Provider"),
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Provider")
-            sections.append(("Provider Station", bp, bp_str, annotated))
+            blueprints.append(bp)
 
         if "receiver" in config:
             c = config["receiver"]
-            bp, annotated = generate_receiver_blueprint(
+            bp = generate_receiver(
                 allowlist=c.get("allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
                 inserters_per_wagon=c.get("inserters_per_wagon", 6),
                 station_name=c.get("station_name", "LTN Receiver"),
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Receiver")
-            sections.append(("Receiver Station", bp, bp_str, annotated))
+            blueprints.append(bp)
 
         if "dual" in config:
             c = config["dual"]
-            bp, annotated = generate_dual_blueprint(
+            bp = generate_dual(
                 provide_allowlist=c.get("provide_allowlist", default_allowlist),
                 request_allowlist=c.get("request_allowlist", default_allowlist),
                 wagons=c.get("wagons", 2),
                 inserters_per_wagon=c.get("inserters_per_wagon", 6),
                 station_name=c.get("station_name", "LTN Dual"),
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Dual")
-            sections.append(("Dual-Mode Station", bp, bp_str, annotated))
+            blueprints.append(bp)
 
-    # ─── CLI mode ───
+        if not blueprints:
+            parser.error("Config file has no valid station definitions.")
+
+        if len(blueprints) == 1:
+            book_or_bp = blueprints[0]
+            label = "Config Station"
+        else:
+            book_or_bp = build_book("LTN Stations", blueprints)
+            label = "Config Stations (book)"
+
+        bp_string = encode_blueprint(book_or_bp)
+        verify_blueprint(bp_string, label)
+        sections.append((label, book_or_bp, bp_string))
+
+    # ─── --all mode: book with all types × 1/2/3 wagons ───
+    elif args.all:
+        allowlist = args.allowlist or default_allowlist
+        provide = args.provide or allowlist
+        request = args.request or allowlist
+        ipw = args.inserters_per_wagon
+
+        all_blueprints = []
+        for wagon_count in (1, 2, 3):
+            all_blueprints.append(generate_provider(
+                allowlist=allowlist,
+                wagons=wagon_count,
+                inserters_per_wagon=ipw,
+                load_from_top=args.load_from_top,
+                station_name=f"Provider ({wagon_count}W)",
+            ))
+            all_blueprints.append(generate_receiver(
+                allowlist=allowlist,
+                wagons=wagon_count,
+                inserters_per_wagon=ipw,
+                station_name=f"Receiver ({wagon_count}W)",
+            ))
+            all_blueprints.append(generate_dual(
+                provide_allowlist=provide,
+                request_allowlist=request,
+                wagons=wagon_count,
+                inserters_per_wagon=ipw,
+                station_name=f"Dual ({wagon_count}W)",
+            ))
+
+        book = build_book("LTN Stations", all_blueprints)
+        bp_string = encode_blueprint(book)
+        verify_blueprint(bp_string, "LTN Stations Book")
+        sections.append(("LTN Stations (Blueprint Book)", book, bp_string))
+
+    # ─── Individual station mode ───
     else:
-        if not (args.provider or args.receiver or args.dual or args.all):
+        if not (args.provider or args.receiver or args.dual):
             parser.error("Specify at least one of: --provider, --receiver, --dual, --all")
 
-        if args.all or args.provider:
+        if args.provider:
             allowlist = args.allowlist or default_allowlist
             name = args.station_name or "LTN Provider"
-            bp, annotated = generate_provider_blueprint(
+            bp = generate_provider(
                 allowlist=allowlist,
                 wagons=args.wagons,
                 inserters_per_wagon=args.inserters_per_wagon,
                 load_from_top=args.load_from_top,
                 station_name=name,
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Provider")
-            sections.append(("Provider Station", bp, bp_str, annotated))
+            bp_string = encode_blueprint(bp)
+            verify_blueprint(bp_string, "Provider")
+            sections.append(("Provider Station", bp, bp_string))
 
-        if args.all or args.receiver:
+        if args.receiver:
             allowlist = args.allowlist or default_allowlist
             name = args.station_name or "LTN Receiver"
-            bp, annotated = generate_receiver_blueprint(
+            bp = generate_receiver(
                 allowlist=allowlist,
                 wagons=args.wagons,
                 inserters_per_wagon=args.inserters_per_wagon,
                 station_name=name,
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Receiver")
-            sections.append(("Receiver Station", bp, bp_str, annotated))
+            bp_string = encode_blueprint(bp)
+            verify_blueprint(bp_string, "Receiver")
+            sections.append(("Receiver Station", bp, bp_string))
 
-        if args.all or args.dual:
+        if args.dual:
             provide = args.provide or args.allowlist or default_allowlist
             request = args.request or args.allowlist or default_allowlist
             name = args.station_name or "LTN Dual"
-            bp, annotated = generate_dual_blueprint(
+            bp = generate_dual(
                 provide_allowlist=provide,
                 request_allowlist=request,
                 wagons=args.wagons,
                 inserters_per_wagon=args.inserters_per_wagon,
                 station_name=name,
             )
-            bp_str = encode_blueprint(bp)
-            verify_blueprint(bp_str, "Dual")
-            sections.append(("Dual-Mode Station", bp, bp_str, annotated))
+            bp_string = encode_blueprint(bp)
+            verify_blueprint(bp_string, "Dual")
+            sections.append(("Dual-Mode Station", bp, bp_string))
 
     if not sections:
-        parser.error("No stations to generate. Check your config or flags.")
+        parser.error("No stations to generate.")
 
     generate_output(sections, args.output)
 
