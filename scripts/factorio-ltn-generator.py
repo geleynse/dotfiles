@@ -217,7 +217,8 @@ def build_parameter_defs(names: list[str]) -> list[dict]:
     ]
 
 
-def build_provider_decider(eid: int, position: dict, direction: int = EAST) -> Entity:
+def build_provider_decider(eid: int, position: dict, direction: int = EAST,
+                           output_green: bool = False) -> Entity:
     """Decider for provider stations: per-network red Each > 0 AND green Each > 0.
 
     Uses Factorio 2.0 per-network conditions to check BOTH:
@@ -227,6 +228,8 @@ def build_provider_decider(eid: int, position: dict, direction: int = EAST) -> E
     When remaining hits 0, signal vanishes and inserter filter clears.
 
     Default direction=EAST: 2-tile-wide horizontal layout (position.y at INT+0.5).
+    output_green=True: output on green terminal (for inventory filter decider #2, wired via OUT_GREEN).
+    output_green=False: output on red terminal (for inserter filter decider #1, wired via OUT_RED).
     """
     return Entity(
         entity_number=eid,
@@ -249,7 +252,7 @@ def build_provider_decider(eid: int, position: dict, direction: int = EAST) -> E
                 ],
                 "outputs": [{
                     "signal": virtual_signal("signal-each"),
-                    "networks": {"red": True, "green": False},
+                    "networks": {"red": not output_green, "green": output_green},
                 }],
             },
         },
@@ -401,8 +404,9 @@ def _build_north_side(
     entities.append(build_provider_decider(decider1_id, {"x": X_DECIDER1_N, "y": Y_DECIDER1_N}, direction=EAST))
 
     # Decider #2 (inventory filter) on output-inserter row (y=-1.5), dir=WEST
+    # output_green=True: wired via OUT_GREEN to lamp GREEN
     decider2_id = ids.next()
-    entities.append(build_provider_decider(decider2_id, {"x": X_DECIDER2_N, "y": Y_DECIDER2_N}, direction=WEST))
+    entities.append(build_provider_decider(decider2_id, {"x": X_DECIDER2_N, "y": Y_DECIDER2_N}, direction=WEST, output_green=True))
 
     # Unload wiring: stop cargo + output_CC → decider #1 RED (remaining = cargo + delivery)
     # Cargo is positive; LTN delivery is negative; when cargo drains to 0, signal vanishes.
@@ -610,7 +614,7 @@ def _build_provider(allowlist, wagons=3, station_name="LTN Provider"):
     decider1_id = ids.next()
     entities.append(build_provider_decider(decider1_id, {"x": X_DECIDER1_N, "y": Y_DECIDER1_N}, direction=EAST))
     decider2_id = ids.next()
-    entities.append(build_provider_decider(decider2_id, {"x": X_DECIDER2_N, "y": Y_DECIDER2_N}, direction=WEST))
+    entities.append(build_provider_decider(decider2_id, {"x": X_DECIDER2_N, "y": Y_DECIDER2_N}, direction=WEST, output_green=True))
 
     add_wire(wires, stop_id, RED, arith_id, RED)
     add_wire(wires, arith_id, OUT_RED, decider1_id, RED)
