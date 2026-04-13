@@ -341,7 +341,7 @@ def build_ltn_combinator(ids, ltn_tags):
         name="ltn-combinator",
         position={"x": -1.5, "y": -0.5},
         control_behavior={"sections": {"sections": [{"index": 1}]}},
-        tags={"ltnc": dict(ltn_tags)},
+        tags={"ltnc": {"provider": False, "requester": False, **ltn_tags}},
     )
     return eid, ent
 
@@ -382,22 +382,20 @@ def _build_north_side(
       bob-red row: x=+27.5 (end, after last wagon)
 
     Wiring (receiver / unload):
-      output_CC RED → north arith RED → arith OUT_RED → decider #1 RED
+      stop RED → decider #1 RED  (cargo drives filter; when wagon empty signal clears)
+      output_CC RED → decider #1 RED  (LTN delivery signal; negative, sums with cargo)
       CC GREEN → decider #1 GREEN
       CC GREEN → decider #2 GREEN
       chest chain RED → decider #2 RED
       decider #2 OUT_GREEN → lamp GREEN
       decider #1 OUT_RED → first chest-row pole RED → bob-red chain (cross-row to y=+0.5)
-      chest chain GREEN also daisy-chained → first chest GREEN → lamp GREEN (direct reading)
+      chest chain RED only (no green chain — decider #2 OUT_GREEN is the sole inventory path to lamp)
 
     Returns (pole_ids_chest_row + [end_pole], chest_ids, inserter_ids, bob_ids).
     """
     # Combinators on chest row (y=-0.5)
     cc_id = ids.next()
     entities.append(build_allowlist_cc(cc_id, {"x": X_CC_N, "y": Y_CC_N}, allowlist))
-
-    arith_id = ids.next()
-    entities.append(build_inverter(arith_id, {"x": X_ARITH_N, "y": Y_ARITH_N}, direction=EAST))
 
     decider1_id = ids.next()
     entities.append(build_provider_decider(decider1_id, {"x": X_DECIDER1_N, "y": Y_DECIDER1_N}, direction=EAST))
@@ -406,9 +404,10 @@ def _build_north_side(
     decider2_id = ids.next()
     entities.append(build_provider_decider(decider2_id, {"x": X_DECIDER2_N, "y": Y_DECIDER2_N}, direction=WEST))
 
-    # Receiver wiring: output_CC → arith (×-1) → decider #1 RED; CC green → decider #1 green
-    add_wire(wires, output_cc_id, RED, arith_id, RED)
-    add_wire(wires, arith_id, OUT_RED, decider1_id, RED)
+    # Unload wiring: stop cargo + output_CC → decider #1 RED (remaining = cargo + delivery)
+    # Cargo is positive; LTN delivery is negative; when cargo drains to 0, signal vanishes.
+    add_wire(wires, stop_id, RED, decider1_id, RED)
+    add_wire(wires, output_cc_id, RED, decider1_id, RED)
     add_wire(wires, cc_id, GREEN, decider1_id, GREEN)
 
     # Decider #2 (inventory filter): CC green + chest-chain red → OUT_GREEN → lamp green
@@ -447,15 +446,12 @@ def _build_north_side(
 
             # Bob-red inserter (unload: picks wagon south, drops chest north; dir=8/SOUTH in manual)
             bid = ids.next()
-            entities.append(Entity(bid, "bob-red-inserter", {"x": x, "y": Y_UNLOAD_INS}, direction=SOUTH))
+            entities.append(Entity(bid, "bob-red-inserter", {"x": x, "y": Y_UNLOAD_INS}, direction=SOUTH,
+                                   control_behavior={"circuit_set_filters": True}, use_filters=True))
             bob_ids.append(bid)
 
-    # Chest daisy-chain GREEN (so chests feed inventory to lamp via the direct green wire)
-    for i in range(len(chest_ids) - 1):
-        add_wire(wires, chest_ids[i], GREEN, chest_ids[i + 1], GREEN)
-    # First chest GREEN → lamp GREEN (direct inventory reading, matches user's manual)
-    add_wire(wires, chest_ids[0], GREEN, input_lamp_id, GREEN)
-    # Also chest chain RED → decider #2 RED (filtered inventory path)
+    # Chest chain RED → decider #2 RED (filtered inventory path; decider #2 OUT_GREEN → lamp)
+    # No green chain — adding a direct chest GREEN → lamp would double-count inventory.
     for i in range(len(chest_ids) - 1):
         add_wire(wires, chest_ids[i], RED, chest_ids[i + 1], RED)
     add_wire(wires, chest_ids[0], RED, decider2_id, RED)
@@ -553,6 +549,8 @@ def _build_south_compact_side(
                 position={"x": x, "y": Y_COMPACT_S},
                 direction=cfg["direction"],
                 pickup_position=cfg["pickup_position"],
+                control_behavior={"circuit_set_filters": True},
+                use_filters=True,
             ))
             bob_ids.append(bid)
 
@@ -643,13 +641,14 @@ def _build_provider(allowlist, wagons=3, station_name="LTN Provider"):
             entities.append(Entity(cid, "steel-chest", {"x": x, "y": Y_CHEST_N}))
             chest_ids.append(cid)
             bid = ids.next()
-            entities.append(Entity(bid, "bob-red-inserter", {"x": x, "y": Y_UNLOAD_INS}, direction=SOUTH))
+            entities.append(Entity(bid, "bob-red-inserter", {"x": x, "y": Y_UNLOAD_INS}, direction=SOUTH,
+                                   control_behavior={"circuit_set_filters": True}, use_filters=True))
             bob_ids.append(bid)
 
+    # Chest chain RED → decider #2 RED (filtered inventory path; decider #2 OUT_GREEN → lamp)
+    # No green chain — direct chest GREEN → lamp would double-count inventory.
     for i in range(len(chest_ids) - 1):
-        add_wire(wires, chest_ids[i], GREEN, chest_ids[i + 1], GREEN)
         add_wire(wires, chest_ids[i], RED, chest_ids[i + 1], RED)
-    add_wire(wires, chest_ids[0], GREEN, input_lamp_id, GREEN)
     add_wire(wires, chest_ids[0], RED, decider2_id, RED)
 
     all_poles = chest_pole_ids + [end_pole_id]

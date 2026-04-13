@@ -64,6 +64,7 @@ class Entity:
     always_on: Optional[bool] = None
     pickup_position: Optional[list] = None
     drop_position: Optional[list] = None
+    use_filters: Optional[bool] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -85,6 +86,8 @@ class Entity:
             d["pickup_position"] = self.pickup_position
         if self.drop_position is not None:
             d["drop_position"] = self.drop_position
+        if self.use_filters is not None:
+            d["use_filters"] = self.use_filters
         return d
 
 
