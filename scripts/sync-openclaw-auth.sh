@@ -30,6 +30,24 @@ else
     echo "Token expires in ${HOURS_LEFT}h — triggering refresh via claude API call..."
     unset CLAUDECODE  # Ensure we're not nested in another Claude Code session
     /home/alan/.local/bin/claude -p "." --output-format text > /dev/null 2>&1 && echo "Token refreshed" || echo "WARNING: Token refresh failed" >&2
+
+    # Re-check expiry after refresh attempt. If still expired, abort — don't sync
+    # a dead token to downstream hosts, and ping so I actually see it.
+    HOURS_LEFT=$(python3 -c "
+import json, time
+creds = json.load(open('$CLAUDE_CREDS'))
+exp = creds.get('claudeAiOauth', {}).get('expiresAt', 0) / 1000
+print(f'{(exp - time.time()) / 3600:.1f}')
+" 2>/dev/null)
+    if python3 -c "exit(0 if float('${HOURS_LEFT:-99}') > 0 else 1)" 2>/dev/null; then
+        echo "Refresh succeeded — token now has ${HOURS_LEFT}h"
+    else
+        echo "ABORT: token still expired (${HOURS_LEFT}h) after refresh — needs manual /login" >&2
+        curl -s -H "Title: Claude token refresh failed" -H "Priority: high" -H "Tags: warning,robot" \
+            -d "Fleet auth dead — token expired ${HOURS_LEFT}h ago and refresh token rejected. Run /login on alan-framework." \
+            https://ntfy.sh/cra-f20b2536072bd5fbb9bc8f68488372f7 > /dev/null 2>&1 || true
+        exit 1
+    fi
 fi
 
 # Sync tasks CLI and skills to LXC 109
