@@ -214,11 +214,79 @@ def build_rail(ids: IDCounter, x: float, y: float, direction: int = EAST) -> tup
 
 def build_curved_rail(ids: IDCounter, x: float, y: float, direction: int,
                       name: str = "curved-rail-a") -> tuple:
-    """Curved rail at (x, y). Returns (id, entity)."""
+    """Curved rail at (x, y). Returns (id, entity).
+
+    Factorio 2.0 has curved-rail-a and curved-rail-b variants. A blueprint
+    mirror swaps a↔b; a 180° rotation keeps the name but adds 8 to direction
+    (mod 16).
+    """
     eid = ids.next()
     return eid, Entity(
         entity_number=eid,
         name=name,
         position={"x": x, "y": y},
         direction=direction,
+    )
+
+
+def build_half_diagonal_rail(ids: IDCounter, x: float, y: float, direction: int) -> tuple:
+    """Half-diagonal rail (Factorio 2.0 elevated-rail-style piece) at (x, y)."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="half-diagonal-rail",
+        position={"x": x, "y": y},
+        direction=direction,
+    )
+
+
+def build_rail_signal(ids: IDCounter, x: float, y: float, direction: int) -> tuple:
+    """Regular rail signal at (x, y). Direction encodes which side/rail it monitors."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="rail-signal",
+        position={"x": x, "y": y},
+        direction=direction,
+    )
+
+
+def build_rail_chain_signal(ids: IDCounter, x: float, y: float, direction: int) -> tuple:
+    """Rail chain signal at (x, y). Use at intersection entries to prevent deadlock."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="rail-chain-signal",
+        position={"x": x, "y": y},
+        direction=direction,
+    )
+
+
+def build_roboport(ids: IDCounter, x: float, y: float) -> tuple:
+    """Roboport at (x, y). 4x4 footprint, centered."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="roboport",
+        position={"x": x, "y": y},
+    )
+
+
+def build_radar(ids: IDCounter, x: float, y: float) -> tuple:
+    """Radar at (x, y). 3x3 footprint."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="radar",
+        position={"x": x, "y": y},
+    )
+
+
+def build_big_electric_pole(ids: IDCounter, x: float, y: float) -> tuple:
+    """Big electric pole at (x, y). 2x2 footprint, 30-tile wire reach."""
+    eid = ids.next()
+    return eid, Entity(
+        entity_number=eid,
+        name="big-electric-pole",
+        position={"x": x, "y": y},
     )
