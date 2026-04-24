@@ -43,9 +43,15 @@ print(f'{(exp - time.time()) / 3600:.1f}')
         echo "Refresh succeeded — token now has ${HOURS_LEFT}h"
     else
         echo "ABORT: token still expired (${HOURS_LEFT}h) after refresh — needs manual /login" >&2
-        curl -s -H "Title: Claude token refresh failed" -H "Priority: high" -H "Tags: warning,robot" \
-            -d "Fleet auth dead — token expired ${HOURS_LEFT}h ago and refresh token rejected. Run /login on alan-framework." \
-            https://ntfy.sh/cra-f20b2536072bd5fbb9bc8f68488372f7 > /dev/null 2>&1 || true
+        # Quiet hours: suppress push 22:00–09:00 local (Pacific). Log still captures the abort.
+        HOUR=$(date +%H)
+        if (( 10#$HOUR >= 9 && 10#$HOUR < 22 )); then
+            curl -s -H "Title: Claude token refresh failed" -H "Priority: high" -H "Tags: warning,robot" \
+                -d "Fleet auth dead — token expired ${HOURS_LEFT}h ago and refresh token rejected. Run /login on alan-framework." \
+                https://ntfy.sh/cra-f20b2536072bd5fbb9bc8f68488372f7 > /dev/null 2>&1 || true
+        else
+            echo "quiet hours (${HOUR}:00) — skipping ntfy push" >&2
+        fi
         exit 1
     fi
 fi
