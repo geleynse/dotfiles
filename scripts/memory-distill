@@ -46,8 +46,8 @@ LAST_REVIEW = META_DIR / "last-review.txt"
 REVIEW_LOG = META_DIR / "review-log.md"
 OBSIDIAN_INDEX = VAULT / "obsidian" / "_index.md"
 
-DENDRON_VAULT = pathlib.Path.home() / "Dendron" / "vault.personal"
-TASKS_DONE = DENDRON_VAULT / "tasks.done.md"
+OBSIDIAN_VAULT = pathlib.Path.home() / "Obsidian" / "vault"
+TASKS_DONE = OBSIDIAN_VAULT / "tasks" / "done.md"
 
 MEMORY_SOFT_CAP = 15_000
 MEMORY_HARD_CAP = 18_000
