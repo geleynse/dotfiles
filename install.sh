@@ -33,8 +33,9 @@ done
 
 echo "=== Linking .config subdirs ==="
 mkdir -p "$HOME/.config"
-for src in "$DOTFILES/config/"/*/; do
+for src in "$DOTFILES/config"/*/; do
   [[ -e "$src" ]] || continue
+  src="${src%/}"
   name="$(basename "$src")"
   backup_and_link "$src" "$HOME/.config/$name"
 done
