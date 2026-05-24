@@ -1,0 +1,6 @@
+*_local
+vim/undodir/*
+!vim/undodir/.gitignore
+.DS_Store
+__pycache__/
+*.pyc

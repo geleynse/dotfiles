@@ -1,0 +1,95 @@
+#!/bin/bash
+set -m
+
+showhelp() {
+    echo "Usage: $0 [-ohvrc] <command>"
+    echo "Pipes stderr from command to a new tmux pane."
+    echo "  -h | -v     split horizontally or vertically (default vertically)"
+    echo "  -r          send stdout to pane instead of stderr"
+    echo "  -o          send both stdout and stderr to new panes"
+    echo "  -c          close pane automatically after program terminates"
+    exit 1
+}
+
+direction=-v
+revdir=-h
+reverse=
+splitout=
+close=
+while true; do
+    case $1 in 
+        -h)
+            direction=-v
+            revdir=-h
+            ;;
+        -v)
+            direction=-h
+            revdir=-v
+            ;;
+        -r)
+            reverse=1;; 
+        -o)
+            splitout=1;;
+        -c)
+            close=1;;
+        -*|"")
+            showhelp;;
+        *)
+            break;;
+    esac
+    shift
+done
+
+pipeerr=1
+if [ -n "$splitout" ]; then
+    pipeout=1
+fi
+if [ -n "$reverse" ]; then
+    pipeerr="$pipeout"
+    pipeout=1
+fi
+
+thedate() { 
+    date '+%y/%m/%d %H:%M:%S' 
+}
+
+mkpipe() {
+    { pipe=$(mktemp) && 
+        rm -f "$pipe" && 
+        mkfifo "$pipe" &&
+        echo "$pipe"
+    } || {
+        echo "failed creating named pipe";
+        exit 1
+    }
+}
+
+err=/dev/stderr
+out=/dev/stdout
+
+if [ -n "$pipeout" ]; then
+    out=$(mkpipe)
+fi
+if [ -n "$pipeerr" ]; then
+    err=$(mkpipe)
+fi
+
+"$@" > "$out" 2> "$err" &
+
+pid=$!
+if [ -n "$pipeout" ]; then 
+    outpane=$(tmux split-window $direction -PdI -F "#D" "echo -ne '\e[37m'; echo '[$(thedate) stdout for $pid:' $* ']'; echo -ne '\e[0m'; cat $out; echo -e '\e[37m'; read")
+    target="-t $outpane"
+    direction=$revdir
+fi
+[[ -n "$pipeerr" ]] && errpane=$(tmux split-window $direction $target -PdI -F "#D" "echo -ne '\e[37m'; echo '[$(thedate) stderr for $pid:' $* ']'; echo -ne '\e[0m'; cat $err; echo -e '\e[37m'; read")
+
+fg %1 >/dev/null
+exitcode=$?
+
+message="[$(thedate) Process terminated (exit code $exitcode), press Enter to close]"
+[[ -n "$close" ]] && message="C-m"
+[[ -n "$pipeout" ]] && tmux send-keys -t "$outpane" "$message"
+[[ -n "$pipeerr" ]] && tmux send-keys -t "$errpane" "$message"
+
+rm -f pipe

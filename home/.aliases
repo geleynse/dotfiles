@@ -1,0 +1,100 @@
+# Aliases
+alias grep='nocorrect grep --color=auto'
+
+alias sudopath='sudo env PATH=$PATH'
+
+# shortened commands
+alias l='ls'
+alias la='ls -a'
+alias v='vim'
+alias vi='vim'
+
+alias rezsh='source ~/.zshrc'
+
+# git aliases
+alias g='git'
+alias ga='git add'
+alias gp='git push'
+alias gl='git log'
+alias gs='git status'
+alias gd='git diff'
+alias gm='git commit -m'
+alias gma='git commit -am'
+alias gb='git branch'
+alias gc='git checkout'
+alias gra='git remote add'
+alias grr='git remote rm'
+alias gpu='git pull'
+alias gcl='git clone'
+
+if [[ -f ~/.aliases_local ]]
+then
+	source ~/.aliases_local
+fi
+
+# ack -> rg migration reminder
+ack() { echo "Use rg instead of ack"; rg "$@"; }
+
+alias colout='python ~/bin/colout/colout.py'
+
+#color aliases
+alias rainbow='colout "^.*$" rainbow'
+alias Rainbow='colout "^.*$" Rainbow'
+
+# Claude Code in tmux
+# Usage: cc [name] [claude args...]
+#   cc              -> session: claude-HHMMSS
+#   cc myproject    -> session: claude-myproject, remote control ON
+cc() {
+  local session_name extra_args=()
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="claude-$1"
+    extra_args=(--permission-mode bypassPermissions)
+    shift
+  else
+    session_name="claude-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "claude ${extra_args[*]} $*; zsh" && tmux attach -t "$session_name"
+}
+
+# Claude Code with specific model in tmux
+# Usage: cch [name] [args...]  ccs [name] [args...]  cco [name] [args...]
+cch() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model haiku "$@"
+}
+ccs() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model sonnet "$@"
+}
+cco() {
+  local name=""
+  if [[ -n "$1" && "$1" != -* ]]; then name="$1"; shift; fi
+  cc "$name" --model opus "$@"
+}
+
+# Codex in tmux
+cx() {
+  local session_name
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="codex-$1"
+    shift
+  else
+    session_name="codex-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "codex $*; zsh" && tmux attach -t "$session_name"
+}
+
+# Gemini CLI in tmux
+cg() {
+  local session_name
+  if [[ -n "$1" && "$1" != -* ]]; then
+    session_name="gemini-$1"
+    shift
+  else
+    session_name="gemini-$(date +%H%M%S)"
+  fi
+  tmux new-session -d -s "$session_name" "gemini $*; zsh" && tmux attach -t "$session_name"
+}

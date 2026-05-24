@@ -1,0 +1,88 @@
+#!/bin/bash
+
+#for i in {0..255} ; do
+#    printf "\x1b[0;38;5;${i}mcolor${i}\n"
+#    printf "\x1b[1;38;5;${i}mcolor${i}\n"
+#done
+
+echo "Normal:"
+for col in {0..16}; do
+    code=$col;
+    printf $'\e[0;38;05;%dm %03d' $code $code;
+done;
+echo;
+
+for line in {0..5}; do
+    for col in {0..39}; do
+        code=$(( $col * 6 + $line + 16 ));
+        printf $'\e[0;38;05;%dm %03d' $code $code;
+    done;
+    echo;
+done
+
+echo "Bold:"
+for col in {0..16}; do
+    code=$col;
+    printf $'\e[1;38;05;%dm %03d' $code $code;
+done;
+echo;
+for line in {0..5}; do
+    for col in {0..39}; do
+        code=$(( $col * 6 + $line + 16 ));
+        printf $'\e[1;38;05;%dm %03d' $code $code;
+    done;
+    echo;
+done
+#Reset bold
+printf $'\e[21m';
+
+echo "Dim:"
+for col in {0..16}; do
+    code=$col;
+    printf $'\e[2;38;05;%dm %03d' $code $code;
+done;
+echo;
+for line in {0..5}; do
+    for col in {0..39}; do
+        code=$(( $col * 6 + $line + 16 ));
+        printf $'\e[2;38;05;%dm %03d' $code $code;
+    done;
+    echo;
+done
+#Reset dim
+printf $'\e[22m';
+
+echo "Underlined:"
+for col in {0..16}; do
+    code=$col;
+    printf $'\e[4;38;05;%dm %03d' $code $code;
+done;
+echo;
+for line in {0..5}; do
+    for col in {0..39}; do
+        code=$(( $col * 6 + $line + 16 ));
+        printf $'\e[4;38;05;%dm %03d' $code $code;
+    done;
+    echo;
+done
+#Reset underlined
+printf $'\e[24m';
+
+echo "Reverse:"
+for col in {0..16}; do
+    code=$col;
+    printf $'\e[7;38;05;%dm %03d' $code $code;
+done;
+echo;
+for line in {0..5}; do
+    for col in {0..39}; do
+        code=$(( $col * 6 + $line + 16 ));
+        printf $'\e[7;38;05;%dm %03d' $code $code;
+    done;
+    echo;
+done
+#Reset reverse
+printf $'\e[27m';
+
+#Reset all
+printf $'\e[0m';

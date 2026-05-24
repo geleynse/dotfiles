@@ -1,0 +1,1 @@
+/home/alan/code/claude-config/hosts/alan-framework/hooks/capture-observation.sh

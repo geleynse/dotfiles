@@ -1,0 +1,95 @@
+#!/bin/bash
+#
+# git-squash - Squash commits on current branch into one
+#
+# Usage: git squash [message]
+#   git squash                    # Squash all commits ahead of upstream, open editor for message
+#   git squash "feat: new thing"  # Squash with provided message
+#   git squash --dry-run          # Show what would be squashed without doing it
+#
+# Git alias:
+#   git config --global alias.squash '!~/scripts/git-squash'
+#
+# What it does:
+#   1. Finds your upstream tracking branch
+#   2. Soft-resets to the fork point
+#   3. Commits everything as a single squashed commit
+#   No temp branches. No merge --squash dance. Clean and simple.
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+die() { echo -e "${RED}Error: $1${NC}" >&2; exit 1; }
+
+# Parse args
+DRY_RUN=false
+MESSAGE=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run|-n) DRY_RUN=true; shift ;;
+        --help|-h)
+            sed -n '3,14s/^# //p' "$0"
+            exit 0
+            ;;
+        *) MESSAGE="$1"; shift ;;
+    esac
+done
+
+# Ensure we're in a git repo
+git rev-parse --git-dir &>/dev/null || die "Not a git repository"
+
+# Get current branch
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || die "Detached HEAD — checkout a branch first"
+
+# Get upstream tracking ref
+UPSTREAM=$(git rev-parse --abbrev-ref "${BRANCH}@{upstream}" 2>/dev/null) || die "No upstream set for '$BRANCH'. Set one with: git branch -u origin/$BRANCH"
+
+# Find the fork point (where this branch diverged from upstream)
+FORK=$(git merge-base "$BRANCH" "$UPSTREAM" 2>/dev/null) || die "Cannot find merge base between '$BRANCH' and '$UPSTREAM'"
+
+# Count commits to squash
+COUNT=$(git rev-list --count "$FORK..$BRANCH")
+
+if [[ $COUNT -eq 0 ]]; then
+    echo -e "${GREEN}Nothing to squash — branch is up to date with $UPSTREAM${NC}"
+    exit 0
+fi
+
+if [[ $COUNT -eq 1 ]]; then
+    echo -e "${GREEN}Only 1 commit ahead of $UPSTREAM — nothing to squash${NC}"
+    exit 0
+fi
+
+# Show what we're squashing
+echo -e "${YELLOW}Squashing $COUNT commits on '$BRANCH' (ahead of $UPSTREAM):${NC}"
+echo ""
+git log --oneline "$FORK..$BRANCH"
+echo ""
+
+if [[ "$DRY_RUN" == true ]]; then
+    echo -e "${GREEN}(dry run — no changes made)${NC}"
+    exit 0
+fi
+
+# Check for uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    die "You have uncommitted changes. Commit or stash them first."
+fi
+
+# Do the squash: soft reset to fork point, then commit
+git reset --soft "$FORK"
+
+if [[ -n "$MESSAGE" ]]; then
+    git commit -m "$MESSAGE"
+else
+    # Collect all commit messages as the default editor content
+    git commit --edit -m "$(git log --format='%s' "$FORK..HEAD@{1}" | tac)"
+fi
+
+echo ""
+echo -e "${GREEN}Squashed $COUNT commits into 1 on '$BRANCH'${NC}"
+echo -e "To undo: ${YELLOW}git reflog${NC} → ${YELLOW}git reset --hard <previous-sha>${NC}"
