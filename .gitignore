@@ -4,3 +4,10 @@ vim/undodir/*
 .DS_Store
 __pycache__/
 *.pyc
+
+# restic credentials — never commit these
+config/restic/env
+config/restic/password
+
+# large binaries
+bin/orca-slicer
