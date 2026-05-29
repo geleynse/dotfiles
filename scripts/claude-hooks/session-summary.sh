@@ -1,1 +1,0 @@
-/home/alan/code/claude-config/hosts/alan-framework/hooks/session-summary.sh

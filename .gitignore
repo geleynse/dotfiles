@@ -11,3 +11,6 @@ config/restic/password
 
 # large binaries
 bin/orca-slicer
+
+# scripts/ untracked 2026-05-29 — private/infra tooling, do not publish (lives on disk + synced separately)
+/scripts/
