@@ -362,3 +362,6 @@ alias rook-claude='ssh -t rook "cd ~/.openclaw/workspace && ~/.local/bin/claude 
 
 # Added by Antigravity CLI installer
 export PATH="/home/alan/.local/bin:$PATH"
+
+# GitHub MCP (claude plugin) reads this; pull from gh keyring so no token is stored in plaintext
+export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
