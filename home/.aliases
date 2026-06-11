@@ -98,3 +98,6 @@ cg() {
   fi
   tmux new-session -d -s "$session_name" "gemini $*; zsh" && tmux attach -t "$session_name"
 }
+
+# devcontainer exec into the project rooted at the current dir
+alias dexec='devcontainer exec --workspace-folder .'
