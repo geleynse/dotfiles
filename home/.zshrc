@@ -329,9 +329,6 @@ unset k
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
-# OpenClaw Completion
-source "/home/alan/.openclaw/completions/openclaw.zsh"
-
 # cmux
 source "$HOME/.cmux/cmux.sh"
 
@@ -356,8 +353,8 @@ chrome-debug() {
     google-chrome-stable --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-debug-profile &disown
 }
 
-# Interactive Claude Code session on rook (LXC 109) — contained environment, skip permission checks
-alias rook-claude='ssh -t rook "cd ~/.openclaw/workspace && ~/.local/bin/claude --dangerously-skip-permissions"'
+# Interactive Claude Code session on rook (LXC 111) — contained environment, skip permission checks
+alias rook-claude='ssh -t rook "cd ~/workspace && ~/.local/bin/claude --dangerously-skip-permissions"'
 
 
 # Added by Antigravity CLI installer
