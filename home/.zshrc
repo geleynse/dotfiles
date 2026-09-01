@@ -341,7 +341,8 @@ rook-relay() {
     echo "🔗 Reverse-tunneling Chrome CDP (localhost:9222) to rook:18792..."
     echo "  Make sure Chrome is running with: google-chrome-stable --remote-debugging-port=9222"
     echo "  Press Ctrl+C to close"
-    ssh -R 18792:localhost:9222 rook@192.168.1.18 -N
+    # ssh alias, not a literal address: this repo is public.
+    ssh -R 18792:localhost:9222 rook -N
 }
 
 
