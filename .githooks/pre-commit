@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Refuse a commit that introduces a NEW credential.
+#
+# Known findings are excused by .secrets-baseline, so this does not fight the
+# credentials already in this repo's history — it stops the next one. Rotating
+# one means deleting its baseline entry, which puts the rotation and the removal
+# of its excuse in the same diff.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass (say why in the commit):   git commit --no-verify
+set -euo pipefail
+
+CHECK="${CHECK_SECRETS:-$HOME/scripts/check-secrets}"
+if [ ! -x "$CHECK" ]; then
+  echo "pre-commit: $CHECK not found — skipping the secret scan." >&2
+  echo "  (it lives in the private 'scripts' repo; set CHECK_SECRETS to override)" >&2
+  exit 0
+fi
+
+exec "$CHECK" --repo "$(git rev-parse --show-toplevel)" --staged --rule rfc1918
