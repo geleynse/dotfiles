@@ -19,6 +19,10 @@ REPOS=(
 )
 REPO_NAMES=("wasabi" "nas" "argon")
 
+# Collected per-repo failures; reported together at the end by report().
+BACKUP_FAILED=()
+PRUNE_FAILED=()
+
 repo_flags() {
   echo -r "$1" --password-file "$RESTIC_PASSWORD_FILE"
 }
@@ -97,23 +101,31 @@ prune() {
   # Per-repo retention policies
   # Wasabi (cloud $$$): lean — monthly + yearly only
   # NAS/Argon (local/offsite): more granular recovery points
-  declare -A RETENTION
-  RETENTION[wasabi]="--keep-monthly 6 --keep-yearly 75"
-  RETENTION[nas]="--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
-  RETENTION[argon]="--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
+  # Indexed to match REPO_NAMES; an associative array is avoided deliberately.
+  RETENTION=(
+    "--keep-monthly 6 --keep-yearly 75"
+    "--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
+    "--keep-daily 3 --keep-weekly 2 --keep-monthly 6 --keep-yearly 75"
+  )
 
   for i in "${!REPOS[@]}"; do
     repo="${REPOS[$i]}"
     name="${REPO_NAMES[$i]}"
-    policy="${RETENTION[$name]}"
+    policy="${RETENTION[$i]}"
 
     echo "=== Pruning $name ($policy) ==="
     # Unlock stale locks before pruning
     restic -r "$repo" --password-file "$RESTIC_PASSWORD_FILE" unlock 2>/dev/null || true
 
-    restic -v -r "$repo" forget \
+    # A failure here must not abort the remaining repos.
+    if restic -v -r "$repo" forget \
       --prune $policy \
-      --password-file "$RESTIC_PASSWORD_FILE"
+      --password-file "$RESTIC_PASSWORD_FILE"; then
+      echo "--- prune $name: OK"
+    else
+      echo "--- prune $name: FAILED"
+      PRUNE_FAILED+=("$name")
+    fi
   done
 }
 
@@ -126,13 +138,46 @@ backup() {
     name="${REPO_NAMES[$i]}"
 
     echo "=== Backing up to $name ==="
-    restic -v -r "$repo" backup /home/alan \
+    # One unreachable repo must not cost us the others. Before this guard,
+    # `set -e` meant an sftp failure on the NAS silently skipped argon
+    # entirely — the offsite copy — and skipped prune for every repo.
+    # (Seen 2026-08-02: NAS broken pipe, argon never ran.)
+    if restic -v -r "$repo" backup /home/alan \
       --password-file "$RESTIC_PASSWORD_FILE" \
       --exclude-caches \
-      --exclude-file "$RESTIC_EXCLUDES"
+      --exclude-file "$RESTIC_EXCLUDES"; then
+      echo "--- backup $name: OK"
+    else
+      echo "--- backup $name: FAILED (continuing with remaining repos)"
+      BACKUP_FAILED+=("$name")
+    fi
   done
 
   prune
+
+  report
+}
+
+# Print a per-repo verdict and exit non-zero if anything failed, so the
+# OnFailure= handler still fires — but only after every repo has been tried.
+report() {
+  echo ""
+  echo "=== Summary ==="
+  for name in "${REPO_NAMES[@]}"; do
+    b="OK"; p="OK"
+    [[ " ${BACKUP_FAILED[*]-} " == *" $name "* ]] && b="FAILED"
+    [[ " ${PRUNE_FAILED[*]-} " == *" $name "* ]] && p="FAILED"
+    printf "  %-8s backup: %-6s prune: %s\n" "$name" "$b" "$p"
+  done
+
+  local nb=${#BACKUP_FAILED[@]} np=${#PRUNE_FAILED[@]}
+  if (( nb > 0 || np > 0 )); then
+    echo ""
+    echo "FAILED: ${nb} backup, ${np} prune. See log above."
+    return 1
+  fi
+  echo ""
+  echo "All repos OK."
 }
 
 case "${1:-backup}" in
@@ -144,6 +189,7 @@ case "${1:-backup}" in
     ;;
   prune)
     prune
+    report
     ;;
   *)
     echo "Usage: backup.sh [backup|prune|status]"
