@@ -12,9 +12,18 @@ set -euo pipefail
 
 CHECK="${CHECK_SECRETS:-$HOME/scripts/check-secrets}"
 if [ ! -x "$CHECK" ]; then
-  echo "pre-commit: $CHECK not found — skipping the secret scan." >&2
-  echo "  (it lives in the private 'scripts' repo; set CHECK_SECRETS to override)" >&2
-  exit 0
+  # FAIL CLOSED (changed 2026-09-05). This used to print a note and `exit 0`,
+  # which meant a clone without the private scripts repo had a hook that
+  # protected nothing while looking like it protected something — the same
+  # decorative-guard shape as an emergency brake that does not exist. A secret
+  # scanner that silently no-ops is worse than no scanner, because it buys
+  # false confidence.
+  echo "pre-commit: REFUSING — secret scanner not found at $CHECK" >&2
+  echo "  It lives in the private 'scripts' repo. Fix one of:" >&2
+  echo "    - check that repo out, or" >&2
+  echo "    - CHECK_SECRETS=/path/to/check-secrets git commit ..., or" >&2
+  echo "    - git commit --no-verify   (deliberate bypass; say why in the message)" >&2
+  exit 1
 fi
 
 exec "$CHECK" --repo "$(git rev-parse --show-toplevel)" --staged --rule rfc1918
