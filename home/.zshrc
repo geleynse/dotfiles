@@ -24,6 +24,7 @@ if [[ -d /opt/local/bin ]] then PATH="/opt/local/bin:$PATH" fi
 if [[ -d $HOME/opt/bin ]] then PATH="$PATH:$HOME/opt/bin" fi
 if [[ -d $HOME/bin ]] then PATH="$PATH:$HOME/bin" fi
 if [[ -d $HOME/.local/lib/npm/bin ]] then PATH="$PATH:$HOME/.local/lib/npm/bin" fi
+if [[ -d $HOME/scripts ]] then PATH="$PATH:$HOME/scripts" fi
 export PATH
 
 #allow tab completion in the middle of a word
