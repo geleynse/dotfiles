@@ -366,16 +366,19 @@ export PATH="/home/alan/.local/bin:$PATH"
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
 
 # Cursor FX for Ghostty (~/code/ghostty-cursor-fx): Enter signal before every command,
-# "done" after one that took more than 5 seconds. Only inside Ghostty.
-if [[ -n $GHOSTTY_RESOURCES_DIR ]] && (( $+commands[cursor-fx] )); then
+# "done" after one that took more than 5 seconds. Only directly in Ghostty: tmux and
+# screen keep GHOSTTY_RESOURCES_DIR but change TERM, and their $TTY is not Ghostty's.
+# The subshells keep `&!` from overwriting the interactive shell's $!.
+if [[ -n ${GHOSTTY_RESOURCES_DIR:-} && ${TERM:-} == xterm-ghostty ]] && (( $+commands[cursor-fx] )); then
 	zmodload zsh/datetime
+	typeset -g _cursor_fx_t0=
 	_cursor_fx_enter() {
 		_cursor_fx_t0=$EPOCHREALTIME
-		cursor-fx signal --tty "$TTY" &!
+		(cursor-fx signal --tty "$TTY" &!)
 	}
 	_cursor_fx_done() {
 		if [[ -n $_cursor_fx_t0 ]] && (( EPOCHREALTIME - _cursor_fx_t0 > 5 )); then
-			cursor-fx signal done --tty "$TTY" &!
+			(cursor-fx signal done --tty "$TTY" &!)
 		fi
 		_cursor_fx_t0=
 	}
