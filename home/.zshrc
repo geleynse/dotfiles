@@ -364,3 +364,21 @@ export PATH="/home/alan/.local/bin:$PATH"
 
 # GitHub MCP (claude plugin) reads this; pull from gh keyring so no token is stored in plaintext
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
+
+# Cursor FX for Ghostty (~/code/ghostty-cursor-fx): Enter signal before every command,
+# "done" after one that took more than 5 seconds. Only inside Ghostty.
+if [[ -n $GHOSTTY_RESOURCES_DIR ]] && (( $+commands[cursor-fx] )); then
+	zmodload zsh/datetime
+	_cursor_fx_enter() {
+		_cursor_fx_t0=$EPOCHREALTIME
+		cursor-fx signal --tty "$TTY" &!
+	}
+	_cursor_fx_done() {
+		if [[ -n $_cursor_fx_t0 ]] && (( EPOCHREALTIME - _cursor_fx_t0 > 5 )); then
+			cursor-fx signal done --tty "$TTY" &!
+		fi
+		_cursor_fx_t0=
+	}
+	add-zsh-hook preexec _cursor_fx_enter
+	add-zsh-hook precmd _cursor_fx_done
+fi
