@@ -331,7 +331,7 @@ export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
 # cmux
-source "$HOME/.cmux/cmux.sh"
+[ -f "$HOME/.cmux/cmux.sh" ] && source "$HOME/.cmux/cmux.sh"
 
 
 # Browser remote debug tunnel to rook LXC (updated 2026-04-02)
