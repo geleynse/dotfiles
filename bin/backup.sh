@@ -12,6 +12,19 @@ source /home/alan/.config/restic/env
 RESTIC_PASSWORD_FILE="/home/alan/.config/restic/password"
 RESTIC_EXCLUDES="/home/alan/.config/restic/excludes"
 
+# Hosts with ~/.ssh/backup_ssh_config (alan-laptop) reach the sftp repos with a
+# dedicated passphrase-free, sftp-only key and never touch the ssh agent. The
+# interactive key's GNOME agent hangs the backup forever when it is still
+# locked after a boot (2026-11-23). Hosts without the file use plain ssh.
+RESTIC_SSH_CONFIG="${HOME}/.ssh/backup_ssh_config"
+restic() {
+  if [ -r "$RESTIC_SSH_CONFIG" ]; then
+    command restic -o sftp.args="-F ${RESTIC_SSH_CONFIG}" "$@"
+  else
+    command restic "$@"
+  fi
+}
+
 REPOS=(
   "s3:https://s3.us-west-1.wasabisys.com/framework-backup"
   "sftp:alan@192.168.1.3:/export/backups/framework-backup"
