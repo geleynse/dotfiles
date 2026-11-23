@@ -118,7 +118,10 @@ prune() {
     restic -r "$repo" --password-file "$RESTIC_PASSWORD_FILE" unlock 2>/dev/null || true
 
     # A failure here must not abort the remaining repos.
+    # --retry-lock: two hosts back up into these repos (see BACKUP_PRUNE_HOST),
+    # so a lock held by the other host's backup is normal; wait for it.
     if restic -v -r "$repo" forget \
+      --retry-lock 30m \
       --prune $policy \
       --password-file "$RESTIC_PASSWORD_FILE"; then
       echo "--- prune $name: OK"
@@ -143,6 +146,7 @@ backup() {
     # entirely — the offsite copy — and skipped prune for every repo.
     # (Seen 2026-08-02: NAS broken pipe, argon never ran.)
     if restic -v -r "$repo" backup /home/alan \
+      --retry-lock 30m \
       --password-file "$RESTIC_PASSWORD_FILE" \
       --exclude-caches \
       --exclude-file "$RESTIC_EXCLUDES"; then
@@ -153,7 +157,16 @@ backup() {
     fi
   done
 
-  prune
+  # Since the 2026-11 desk/laptop split, alan-framework (always-on desk) and
+  # alan-laptop share these repos. Prune takes an exclusive lock, and both
+  # hosts pruning at midnight failed one of them almost nightly. forget groups
+  # by host, so one host pruning still applies the policy to both hosts'
+  # snapshots. `backup.sh prune` still prunes from anywhere.
+  if [ "$(hostname -s)" = "${BACKUP_PRUNE_HOST:-alan-framework}" ]; then
+    prune
+  else
+    echo "=== Skipping prune: ${BACKUP_PRUNE_HOST:-alan-framework} prunes these repos ==="
+  fi
 
   report
 }
